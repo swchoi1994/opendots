@@ -4,6 +4,7 @@ import { PGlite, types, type Transaction } from '@electric-sql/pglite'
 import { vector } from '@electric-sql/pglite-pgvector'
 import { Pool, type QueryResult } from 'pg'
 import { dataDir } from './data-dir'
+import { lockDataDir } from './data-dir-lock'
 import { migrate } from './migrate'
 
 /**
@@ -34,7 +35,11 @@ const noNesting = async (): Promise<never> => {
 /** int8 stays a string, as node-postgres returns it, so both backends hand the repository identical rows. */
 const PARSERS = { [types.INT8]: (value: string) => value }
 
-/** An embedded database: file-backed under `dir`, or in memory when `dir` is omitted (tests). */
+/**
+ * An embedded database: file-backed under `dir`, or in memory when `dir` is
+ * omitted (tests). Opening a directory does not lock it: go through `openDb`,
+ * which does (data-dir-lock.ts), so no second process can open it alongside.
+ */
 export async function openPglite(dir?: string): Promise<PGlite> {
   if (dir) mkdirSync(dir, { recursive: true })
   return PGlite.create({ ...(dir ? { dataDir: dir } : {}), extensions: { vector }, parsers: PARSERS })
@@ -121,8 +126,26 @@ export async function openDb(
     const pool = getPool()
     return { db: pgDb(pool), close: () => pool.end() }
   }
-  const pg = await openPglite(join(dataDir(), 'db'))
-  return { db: pgliteDb(pg), close: () => pg.close() }
+  const dir = join(dataDir(), 'db')
+  // Throws, naming the directory and the holder's pid, while another process has it open.
+  const release = lockDataDir(dir)
+  let pg: PGlite
+  try {
+    pg = await openPglite(dir)
+  } catch (error) {
+    release()
+    throw error
+  }
+  return {
+    db: pgliteDb(pg),
+    close: async () => {
+      try {
+        await pg.close()
+      } finally {
+        release()
+      }
+    },
+  }
 }
 
 /**

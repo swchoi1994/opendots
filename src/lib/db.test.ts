@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
-import { lazyDb, type Db } from './db'
+import { lockPathFor } from './data-dir-lock'
+import { lazyDb, openDb, type Db } from './db'
 
 /** A minimal Db double: no network, nothing written to disk. */
 function fakeDb(): Db {
@@ -73,4 +77,22 @@ test('lazyDb: concurrent first calls share a single open', async () => {
 
   await Promise.all([db.query('SELECT 1'), db.query('SELECT 1')])
   assert.equal(openCalls, 1, 'two calls issued before the open resolves must share one open() call')
+})
+
+test('openDb holds the data directory lock while the embedded database is open', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'opendots-db-'))
+  const previous = process.env.OPENDOTS_DATA_DIR
+  process.env.OPENDOTS_DATA_DIR = root
+  t.after(() => {
+    if (previous === undefined) delete process.env.OPENDOTS_DATA_DIR
+    else process.env.OPENDOTS_DATA_DIR = previous
+    rmSync(root, { recursive: true, force: true })
+  })
+  const lock = lockPathFor(join(root, 'db'))
+
+  const first = await openDb('pglite')
+  assert.equal(readFileSync(lock, 'utf8').trim(), String(process.pid))
+  await assert.rejects(openDb('pglite'), /already open in this process/)
+  await first.close()
+  assert.equal(existsSync(lock), false, 'close releases the lock')
 })

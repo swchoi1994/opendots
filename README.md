@@ -116,6 +116,8 @@ pnpm eval        # golden set, always in dry-run
 pnpm db:init     # apply migrations now (the app also does this on first use)
 ```
 
+Only one process at a time can open the embedded database. Stop the app before you run `pnpm db:init` against it, and don't run `pnpm dev` and `pnpm start` side by side on the same data directory: the second process stops with a message naming the one that holds it.
+
 ## Architecture
 
 ```

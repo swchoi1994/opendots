@@ -1,0 +1,104 @@
+import { linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
+
+/**
+ * One process per embedded database directory.
+ *
+ * PGlite opens a data directory from a second process without complaint, and
+ * the two then overwrite each other's pages: rows are lost with no error. A
+ * second `pnpm dev` (Next quietly moves it to port 3001), `pnpm db:init` while
+ * the app runs, or `pnpm start` next to `pnpm dev` all do that. So the
+ * directory is claimed with a lock file beside it, `<dir>.lock`, holding the
+ * owner's pid: created exclusively, reclaimed when that pid is dead, removed
+ * on close and, best effort, when the process exits.
+ *
+ * Kept outside the directory because PGlite treats the directory as its own
+ * Postgres data folder.
+ */
+
+export function lockPathFor(dir: string): string {
+  return `${dir}.lock`
+}
+
+/** Locks this process holds, by lock path. On globalThis so a dev hot reload still sees them. */
+const globalForLocks = globalThis as typeof globalThis & { __opendotsDirLocks?: Set<string> }
+const held = (globalForLocks.__opendotsDirLocks ??= new Set<string>())
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM: the process exists but belongs to another user.
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+function readHolder(path: string): number | null {
+  try {
+    const pid = Number.parseInt(readFileSync(path, 'utf8').trim(), 10)
+    return Number.isInteger(pid) && pid > 0 ? pid : null
+  } catch {
+    return null
+  }
+}
+
+function releaseAll(): void {
+  for (const path of held) {
+    if (readHolder(path) === process.pid) rmSync(path, { force: true })
+  }
+  held.clear()
+}
+
+let exitHookInstalled = false
+
+/**
+ * Claims `dir` for this process, or throws naming the directory, the pid that
+ * holds it, and what to do. Returns the release function (idempotent; it never
+ * removes a lock another process has since taken).
+ */
+export function lockDataDir(dir: string): () => void {
+  const path = lockPathFor(dir)
+  if (held.has(path)) {
+    throw new Error(`The embedded database at ${dir} is already open in this process; open it once and share the handle.`)
+  }
+  mkdirSync(dirname(path), { recursive: true })
+
+  // Written aside and hard-linked into place: the link appears atomically with
+  // its content, so no other process can ever read a half-written lock.
+  const draft = `${path}.${process.pid}.tmp`
+  writeFileSync(draft, `${process.pid}\n`)
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        linkSync(draft, path)
+        break
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 3) throw error
+      }
+      const holder = readHolder(path)
+      // Our own pid without our own claim is a pid reused after a restart (a
+      // container's pid 1, say): as stale as a dead one.
+      if (holder !== null && holder !== process.pid && isAlive(holder)) {
+        throw new Error(
+          `The embedded database at ${dir} is in use by another OpenDots process (pid ${holder}): ` +
+            `stop the other OpenDots process, then try again. If no such process is running, delete ${path}.`,
+        )
+      }
+      // Re-read right before removing, so a lock another starter just took is left alone.
+      if (readHolder(path) === holder) rmSync(path, { force: true })
+    }
+  } finally {
+    rmSync(draft, { force: true })
+  }
+
+  held.add(path)
+  if (!exitHookInstalled) {
+    exitHookInstalled = true
+    process.once('exit', releaseAll)
+  }
+  return () => {
+    if (!held.delete(path)) return
+    if (readHolder(path) === process.pid) rmSync(path, { force: true })
+  }
+}

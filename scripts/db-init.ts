@@ -8,7 +8,8 @@ import { loadEnv } from './load-env'
  * app starts, or for seeing what a migration run does.
  *
  * Stop OpenDots first when using the embedded database: two processes must
- * never open the same PGlite data directory.
+ * never open the same PGlite data directory, and openDb refuses (naming the
+ * pid that holds it) while the app has it open.
  */
 async function main() {
   loadEnv(process.cwd())
@@ -30,4 +31,8 @@ async function main() {
   }
 }
 
-void main()
+main().catch((error: unknown) => {
+  // A plain message, not a stack trace: the usual cause is "the app is running".
+  console.error(error instanceof Error ? error.message : error)
+  process.exit(1)
+})
