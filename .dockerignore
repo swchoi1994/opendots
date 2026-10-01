@@ -1,0 +1,12 @@
+# Keeping the build context small speeds up every build and, more importantly,
+# prevents local secrets from ever being sent to the daemon.
+node_modules
+.next
+.git
+.env
+.env*.local
+*.log
+.DS_Store
+.playwright-mcp
+README.md
+INTERN-PROJECT.md

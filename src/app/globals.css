@@ -1,0 +1,69 @@
+@import 'tailwindcss';
+
+/*
+ * Tailwind v4 keeps design tokens in CSS rather than a JS config. Anything
+ * declared in @theme becomes a utility automatically (--color-brand-500 gives
+ * bg-brand-500, text-brand-500, and so on).
+ */
+@theme {
+  --color-brand-50: #f3f4ff;
+  --color-brand-100: #e5e7ff;
+  --color-brand-200: #c7cbff;
+  --color-brand-500: #3b82f6;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+
+  --color-ink-900: #111111;
+  --color-ink-700: #3a3a3f;
+  --color-ink-500: #7a7a82;
+  --color-ink-400: #a3a3aa;
+
+  --color-line: #ececef;
+  --color-surface: #f6f6f7;
+  --color-bubble: #ededef;
+  --color-bubble-own: #111111;
+  --color-read: #16a34a;
+
+  /* Bot avatar palette (AvatarColor). */
+  --color-av-violet: #8b5cf6;
+  --color-av-blue: #3b82f6;
+  --color-av-green: #22c55e;
+  --color-av-teal: #14b8a6;
+  --color-av-brown: #8b5e3c;
+  --color-av-orange: #f97316;
+  --color-av-red: #ef4444;
+  --color-av-pink: #ec4899;
+  --color-av-indigo: #6366f1;
+  /* Legacy tokens still used by the human avatar. */
+  --color-av-amber: #f0b866;
+  --color-av-emerald: #6ec99a;
+  --color-av-rose: #ef8a9b;
+  --color-av-sky: #7fb6ef;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--color-ink-900);
+  background: #ffffff;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Keep the thread scrollbar unobtrusive without hiding it from keyboard users. */
+.thread-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #d6d9de transparent;
+}
+.thread-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.thread-scroll::-webkit-scrollbar-thumb {
+  background: #d6d9de;
+  border-radius: 999px;
+}
