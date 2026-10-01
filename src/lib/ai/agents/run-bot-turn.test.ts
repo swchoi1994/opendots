@@ -4,9 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import { loadTurnContext, runBotTurn, VISITOR_RESTRICTED_TOOLS, type TurnEvent } from './run-bot-turn'
-import type { BotEvent, BotRunInput, runBot } from '../claude-code'
+import type { BotEvent, BotRunInput, runBot } from '../brain'
 import type { ScreenCapture } from '../tools/browser-tools'
 import { memoryRepository } from '../../repository/memory-store'
+import { DEFAULT_ASSISTANT } from '../../domain/assistant'
+
+// Seeded bots use the `default` model id. Pin what it resolves to so no test
+// in this file ever probes a real Ollama.
+process.env.OPENDOTS_DEFAULT_MODEL = 'sonnet'
 
 const CHANNEL = 'bot_chief-of-staff'
 
@@ -252,4 +257,28 @@ test('a screen capture is persisted and yielded as a screen event, then attached
   assert.ok(done && done.type === 'done')
   const screens = await memoryRepository.listScreens(url)
   assert.equal(screens[0]?.messageId, done.message.messageId)
+})
+
+test('a bot on the default model runs on whatever the server resolves, and a local run is traced as local', async (t) => {
+  setEnv(t, 'BRAIN_DRY_RUN', undefined)
+  useTempWorkspaces(t)
+  const created = await memoryRepository.createChannel({
+    name: 'Default Model Bot',
+    assistant: { ...DEFAULT_ASSISTANT, name: 'Default Model Bot' },
+  })
+  assert.equal(created.assistant?.model, 'default')
+  await memoryRepository.sendMessage(created.channelUrl, 'which model are you?')
+
+  const brain = fakeBrain([[{ type: 'result', text: 'a local one', sessionId: 's-local', costUsd: null, turns: 1 }]])
+  const events = await collect(runBotTurn(
+    await loadTurnContext(created.channelUrl),
+    {},
+    { runBot: brain.fn, resolveDefaultModel: async () => 'ollama/qwq:latest' },
+  ))
+
+  assert.equal(brain.calls[0]?.model, 'ollama/qwq:latest')
+  const trace = events.find((event) => event.type === 'trace')
+  assert.ok(trace?.type === 'trace')
+  assert.ok(trace.trace.some((entry) => entry.detail === 'default model resolved to ollama/qwq:latest'))
+  assert.ok(trace.trace.some((entry) => entry.detail === 'completed in 1 turn(s), local'))
 })

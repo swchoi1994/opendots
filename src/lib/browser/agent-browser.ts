@@ -1,6 +1,22 @@
 import { execFile } from 'node:child_process'
-import { scrubbedEnv } from '../ai/claude-code'
 import type { CommandRunner } from '../ai/tools/skills-sh'
+
+/** Kept because a CLI subprocess without them cannot find node, npx, or a home. */
+const ENV_ALLOWLIST = ['PATH', 'HOME', 'USER', 'TMPDIR', 'LANG', 'SHELL'] as const
+
+/**
+ * The environment this CLI subprocess is given, built from an allowlist, so a
+ * bot with `shell` or `web_browser` granted never hands it DATABASE_URL and
+ * this server's other secrets.
+ */
+function scrubbedEnv(source: NodeJS.ProcessEnv): Record<string, string> {
+  const env: Record<string, string> = { NO_COLOR: '1' }
+  for (const key of ENV_ALLOWLIST) {
+    const value = source[key]
+    if (typeof value === 'string' && value.length > 0) env[key] = value
+  }
+  return env
+}
 
 /**
  * Typed wrapper over the `agent-browser` CLI: one isolated browser per bot

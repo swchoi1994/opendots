@@ -7,7 +7,9 @@ import { browserFor } from '../../browser/agent-browser'
 import { getRepository } from '../../repository'
 import type { ChatRepository } from '../../repository/chat-repository'
 import { workspaceFor } from '../../bots/workspace'
-import { runBot, type BotErrorKind } from '../claude-code'
+import { DEFAULT_MODEL_ID } from '../../domain/models'
+import { MISSING_API_KEY, runBot, type BotErrorKind } from '../brain'
+import { resolveDefaultModel } from '../model-catalog'
 import { getAiConfig } from '../config'
 import { checkOutput, type GuardrailAction, type GuardrailFinding } from '../guardrails/policies'
 import type { RetrievedChunk } from '../rag/retriever'
@@ -149,6 +151,8 @@ export async function* runBotTurn(
      * test can assert a restricted turn never gets one. Never set outside tests.
      */
     onBrowserHook?: (hook: (capture: ScreenCapture) => Promise<void>) => void
+    /** Resolves the `default` model id; tests pin it instead of probing Ollama. */
+    resolveDefaultModel?: () => Promise<string>
   } = {},
 ): AsyncGenerator<TurnEvent> {
   const repo = getRepository()
@@ -188,6 +192,11 @@ export async function* runBotTurn(
       }
     } else {
       const workspaceDir = workspaceFor(channelUrl)
+      const model =
+        assistant.model === DEFAULT_MODEL_ID
+          ? await (deps.resolveDefaultModel ?? resolveDefaultModel)()
+          : assistant.model
+      if (model !== assistant.model) trace.push({ node: plan.route, detail: `default model resolved to ${model}` })
       const onScreen = async (capture: ScreenCapture) => {
         const screen = await persistScreen(repo, channelUrl, turnId, capture).catch((error) => {
           // A frame that cannot be stored must never fail the browsing turn, but
@@ -226,7 +235,7 @@ export async function* runBotTurn(
 
         for await (const event of run(
           {
-            model: assistant.model,
+            model,
             systemPrompt: plan.systemPrompt,
             prompt: plan.prompt,
             sessionId: resume,
@@ -259,7 +268,10 @@ export async function* runBotTurn(
                 answer = event.text
                 yield { type: 'token', token: event.text }
               }
-              trace.push({ node: plan.route, detail: `completed in ${event.turns} turn(s), $${event.costUsd.toFixed(4)}` })
+              trace.push({
+                node: plan.route,
+                detail: `completed in ${event.turns} turn(s), ${event.costUsd === null ? 'local' : `$${event.costUsd.toFixed(4)}`}`,
+              })
               break
             case 'error':
               failure = { message: event.message, kind: event.kind }
@@ -287,9 +299,9 @@ export async function* runBotTurn(
 
     if (failure && !answer) {
       const detail = failure.kind === 'usage_limit'
-        ? 'Claude usage limit reached for this subscription window. Try again later.'
-        : failure.kind === 'auth'
-          ? 'Claude is not logged in on this machine. Run `claude login` (or set CLAUDE_CODE_OAUTH_TOKEN) and retry.'
+        ? 'The model provider reported a rate or usage limit. Try again later.'
+        : failure.kind === 'auth' && failure.message !== MISSING_API_KEY
+          ? 'The Anthropic API rejected ANTHROPIC_API_KEY. Check the key, then restart OpenDots.'
           : failure.message
       const stored = await repo.appendAssistantMessage(channelUrl, `[assistant error] ${detail}`).catch(() => null)
       yield { type: 'error', error: detail, kind: failure.kind, message: stored }

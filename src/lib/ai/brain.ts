@@ -1,3 +1,5 @@
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   query as sdkQuery,
   type McpServerConfig,
@@ -5,14 +7,19 @@ import {
   type PermissionResult,
   type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk'
+import { dataDir } from '../data-dir'
+import { resolveModel, type ResolvedModel } from '../domain/models'
+import { brainEnv } from './brain-env'
+import { ollamaHost } from './model-catalog'
+import { workspaceGuardHook } from './tools/workspace-guard'
 
 /**
- * The brain: Claude through the Agent SDK on the operator's subscription.
+ * The brain: one Agent SDK run per bot turn, on Claude through the Anthropic
+ * API or on a local model through Ollama's Anthropic-compatible endpoint.
  *
- * The SDK spawns the Claude Code CLI, which reuses the machine's `claude`
- * login (verified on macOS: no API key, no token). `CLAUDE_CODE_OAUTH_TOKEN`
- * is the fallback for hosts without a keychain. This module knows nothing
- * about channels or storage: it turns one prompt into a stream of BotEvents.
+ * The model id decides the provider (domain/models.ts) and brain-env.ts
+ * decides what the CLI subprocess may see. This module knows nothing about
+ * channels or storage: it turns one prompt into a stream of BotEvents.
  */
 
 export type BotErrorKind = 'usage_limit' | 'auth' | 'aborted' | 'session_not_found' | 'other'
@@ -22,10 +29,12 @@ export type BotEvent =
   | { type: 'tool_start'; name: string; summary: string }
   | { type: 'tool_result'; name: string; ok: boolean; summary: string }
   | { type: 'session'; sessionId: string }
-  | { type: 'result'; text: string; sessionId: string; costUsd: number; turns: number }
+  /** `costUsd` is null for local models: the CLI cannot price a model it does not know. */
+  | { type: 'result'; text: string; sessionId: string; costUsd: number | null; turns: number }
   | { type: 'error'; message: string; kind: BotErrorKind }
 
 export interface BotRunInput {
+  /** A concrete model id. `default` is resolved by the caller (run-bot-turn.ts). */
   model: string
   systemPrompt: string
   prompt: string
@@ -43,38 +52,31 @@ export interface BotRunInput {
   signal?: AbortSignal
 }
 
+export const MISSING_API_KEY = 'Set ANTHROPIC_API_KEY, or switch this bot to an Ollama model.'
+
 export interface BrainStatus {
-  provider: 'claude_code'
   mode: 'live' | 'dry-run'
-  auth: 'oauth_token' | 'local_login'
+  anthropic: { keySet: boolean; customBaseUrl: boolean }
+  ollama: { host: string }
 }
 
-export function describeBrain(): BrainStatus {
-  const auth: BrainStatus['auth'] = process.env.CLAUDE_CODE_OAUTH_TOKEN ? 'oauth_token' : 'local_login'
-  return { provider: 'claude_code', mode: process.env.BRAIN_DRY_RUN === '1' ? 'dry-run' : 'live', auth }
-}
-
-/** Kept because a CLI subprocess without them cannot find node, npx, or a home. */
-const ENV_ALLOWLIST = ['PATH', 'HOME', 'USER', 'TMPDIR', 'LANG', 'SHELL'] as const
-/** Kept only when set: how the CLI authenticates on a host with no keychain. */
-const ENV_OPTIONAL = ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR'] as const
-
-/**
- * The environment the CLI subprocess is given, built from an allowlist.
- *
- * The SDK inherits `process.env` when `env` is omitted, which would hand every
- * bot — including one reached through a public share link with `shell` granted
- * — this server's `DATABASE_URL`, `DEPLOYMENT_SESSION_SECRET` and everything
- * else in the process. Denying by default and listing what a run genuinely
- * needs is the only version of this that stays correct as env vars are added.
- */
-export function scrubbedEnv(source: NodeJS.ProcessEnv): Record<string, string> {
-  const env: Record<string, string> = { NO_COLOR: '1' }
-  for (const key of [...ENV_ALLOWLIST, ...ENV_OPTIONAL]) {
-    const value = source[key]
-    if (typeof value === 'string' && value.length > 0) env[key] = value
+export function describeBrain(env: Partial<NodeJS.ProcessEnv> = process.env): BrainStatus {
+  return {
+    mode: env.BRAIN_DRY_RUN === '1' ? 'dry-run' : 'live',
+    anthropic: { keySet: Boolean(env.ANTHROPIC_API_KEY), customBaseUrl: Boolean(env.ANTHROPIC_BASE_URL) },
+    ollama: { host: ollamaHost(env) },
   }
-  return env
+}
+
+/** Ollama failures surface as generic connection or not-found text; say what to do instead. */
+export function explainOllamaFailure(message: string, resolved: ResolvedModel, host: string): string {
+  if (/ECONNREFUSED|fetch failed|connection error|socket hang up|connect/i.test(message)) {
+    return `Ollama isn't answering at ${host}. Start it with \`ollama serve\`.`
+  }
+  if (/not found|\b404\b/i.test(message)) {
+    return `${resolved.sdkModel} isn't pulled. Run \`ollama pull ${resolved.sdkModel}\`.`
+  }
+  return message
 }
 
 export function classifyError(text: string): BotErrorKind {
@@ -174,9 +176,32 @@ export type QueryFn = typeof sdkQuery
 
 export async function* runBot(
   input: BotRunInput,
-  deps: { query?: QueryFn } = {},
+  deps: { query?: QueryFn; env?: Partial<NodeJS.ProcessEnv> } = {},
 ): AsyncGenerator<BotEvent> {
   const query = deps.query ?? sdkQuery
+  const source = deps.env ?? process.env
+
+  let resolved: ResolvedModel
+  try {
+    resolved = resolveModel(input.model)
+  } catch (cause) {
+    yield { type: 'error', message: cause instanceof Error ? cause.message : String(cause), kind: 'other' }
+    return
+  }
+  // No fallback to a claude.ai login: without a key an Anthropic model cannot run.
+  if (resolved.provider === 'anthropic' && !source.ANTHROPIC_API_KEY) {
+    yield { type: 'error', message: MISSING_API_KEY, kind: 'auth' }
+    return
+  }
+
+  const root = dataDir(source)
+  mkdirSync(join(root, 'claude'), { recursive: true })
+  const host = ollamaHost(source)
+  const explain = (event: BotEvent): BotEvent =>
+    event.type === 'error' && event.kind === 'other' && resolved.provider === 'ollama'
+      ? { ...event, message: explainOllamaFailure(event.message, resolved, host) }
+      : event
+
   const abortController = new AbortController()
   input.signal?.addEventListener('abort', () => abortController.abort(), { once: true })
   let stderrTail = ''
@@ -190,11 +215,11 @@ export async function* runBot(
         }
 
   const options: Options = {
-    model: input.model,
+    model: resolved.sdkModel,
     systemPrompt: input.systemPrompt,
     cwd: input.workspaceDir,
     // Replaces the subprocess environment outright — the SDK does not merge it.
-    env: scrubbedEnv(process.env),
+    env: brainEnv(resolved, source, root),
     resume: input.sessionId ?? undefined,
     persistSession: true,
     // Loads <workspace>/.claude/* — settings and installed skills.
@@ -203,6 +228,9 @@ export async function* runBot(
     allowedTools: input.allowedTools,
     permissionMode: 'default',
     canUseTool,
+    // Hooks run before allow rules, so this also covers tools in allowedTools,
+    // which never reach canUseTool.
+    hooks: { PreToolUse: [{ hooks: [workspaceGuardHook(input.workspaceDir)] }] },
     mcpServers: input.mcpServers,
     includePartialMessages: true,
     maxTurns: input.maxTurns,
@@ -216,20 +244,22 @@ export async function* runBot(
   const pendingTools = new Map<string, string>()
   try {
     for await (const message of query({ prompt: input.prompt, options })) {
-      for (const event of mapSdkMessage(message, pendingTools)) yield event
+      for (const event of mapSdkMessage(message, pendingTools)) {
+        yield event.type === 'result' && resolved.provider === 'ollama' ? { ...event, costUsd: null } : explain(event)
+      }
     }
   } catch (cause) {
     const text = cause instanceof Error ? cause.message : String(cause)
     const detail = [text, stderrTail.trim()].filter(Boolean).join('\n')
-    yield {
+    yield explain({
       type: 'error',
       message: detail,
       kind: input.signal?.aborted ? 'aborted' : classifyError(detail),
-    }
+    })
   } finally {
     // Runs on the normal path AND when a consumer closes the generator early
     // (a disconnected client). Without it the CLI subprocess would keep working
-    // — and keep spending subscription usage — for a reply nobody will read.
+    // — and keep spending API usage — for a reply nobody will read.
     abortController.abort()
   }
 }

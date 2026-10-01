@@ -1,7 +1,22 @@
 import { execFile } from 'node:child_process'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { scrubbedEnv } from '../claude-code'
+
+/** Kept because a CLI subprocess without them cannot find node, npx, or a home. */
+const ENV_ALLOWLIST = ['PATH', 'HOME', 'USER', 'TMPDIR', 'LANG', 'SHELL'] as const
+
+/**
+ * The environment this CLI subprocess is given, built from an allowlist, so
+ * the skills.sh CLI never inherits DATABASE_URL and this server's other secrets.
+ */
+function scrubbedEnv(source: NodeJS.ProcessEnv): Record<string, string> {
+  const env: Record<string, string> = { NO_COLOR: '1' }
+  for (const key of ENV_ALLOWLIST) {
+    const value = source[key]
+    if (typeof value === 'string' && value.length > 0) env[key] = value
+  }
+  return env
+}
 
 /**
  * skills.sh client.
