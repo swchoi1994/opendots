@@ -125,14 +125,42 @@ export async function openDb(
   return { db: pgliteDb(pg), close: () => pg.close() }
 }
 
-/** Defers opening (async) to the first query, so callers get a Db synchronously. */
-function lazyDb(open: () => Promise<Db>): Db {
-  let ready: Promise<Db> | null = null
-  const get = () =>
-    (ready ??= open().catch((error: unknown) => {
-      ready = null // a failed open is retried by the next caller, not cached
+/**
+ * Defers opening (async) to the first query, so callers get a Db
+ * synchronously, then defers `prepare` (e.g. migrate) the same way.
+ *
+ * `open` and `prepare` are memoized SEPARATELY and must stay that way: for
+ * the file-backed PGlite path, `open()` creates a live handle on disk, and a
+ * second `open()` on the same data directory while the first is still live
+ * does not error — it silently diverges from it (two independent handles on
+ * one directory, each unaware of the other's writes). If a `prepare` failure
+ * (a bad migration) reset the SAME retry slot as `open`, every retry after a
+ * broken migration would call `open()` again and leak one more orphaned,
+ * diverging PGlite instance — the migration fails identically every time, so
+ * nothing would ever stop. Resetting only `prepared` on a `prepare` failure
+ * makes the retry reuse the one already-open handle; `opened` is reset only
+ * when `open()` itself throws.
+ */
+export function lazyDb(open: () => Promise<Db>, prepare: (db: Db) => Promise<unknown>): Db {
+  let opened: Promise<Db> | null = null
+  const getOpened = () =>
+    (opened ??= open().catch((error: unknown) => {
+      opened = null // a failed open is retried by the next caller, not cached
       throw error
     }))
+
+  let prepared: Promise<Db> | null = null
+  const get = () =>
+    (prepared ??= getOpened()
+      .then(async (db) => {
+        await prepare(db)
+        return db
+      })
+      .catch((error: unknown) => {
+        prepared = null // a failed prepare retries against the SAME opened handle, not a new one
+        throw error
+      }))
+
   return {
     async query<T>(sql: string, params?: unknown[]) {
       return (await get()).query<T>(sql, params)
@@ -148,10 +176,6 @@ function lazyDb(open: () => Promise<Db>): Db {
 
 /** The process-wide database: opened and migrated on first use, so nobody has to run db:init first. */
 export function getDb(): Db {
-  globalForDb.__opendotsDb ??= lazyDb(async () => {
-    const { db } = await openDb()
-    await migrate(db)
-    return db
-  })
+  globalForDb.__opendotsDb ??= lazyDb(async () => (await openDb()).db, migrate)
   return globalForDb.__opendotsDb
 }
