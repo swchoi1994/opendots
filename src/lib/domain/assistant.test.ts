@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { DEFAULT_ASSISTANT, TOOL_CATALOG, parseAssistantConfig } from './assistant'
+import { DEFAULT_ASSISTANT, SHELL_BROWSER_WARNING, TOOL_CATALOG, parseAssistantConfig, shellBrowserWarning } from './assistant'
 
 test('parseAssistantConfig fills name and avatar, defaults the model, and drops a legacy provider field', () => {
   const parsed = parseAssistantConfig({ provider: 'claude_code', model: '  ' }, 'Chief of Staff')
@@ -29,4 +29,11 @@ test('parseAssistantConfig parses browser.headed, defaulting to false', () => {
   assert.equal(parseAssistantConfig({ browser: { headed: true } }).browser.headed, true)
   assert.equal(parseAssistantConfig({}).browser.headed, false)
   assert.equal(parseAssistantConfig({ browser: { headed: 'yes' } }).browser.headed, false)
+})
+
+test('shell plus browser carries a warning; either alone does not', () => {
+  assert.equal(shellBrowserWarning(['shell', 'web_browser']), SHELL_BROWSER_WARNING)
+  assert.equal(shellBrowserWarning(['web_browser', 'files', 'shell']), SHELL_BROWSER_WARNING)
+  assert.equal(shellBrowserWarning(['shell']), null)
+  assert.equal(shellBrowserWarning(['web_browser', 'files']), null)
 })

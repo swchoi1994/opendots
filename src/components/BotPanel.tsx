@@ -8,10 +8,12 @@ import { ScreenPanel } from './ScreenPanel'
 import {
   DEFAULT_ASSISTANT,
   TOOL_CATALOG,
+  shellBrowserWarning,
   type AssistantConfig,
   type ToolName,
 } from '@/lib/domain/assistant'
 import type { BotAvatar as BotAvatarModel } from '@/lib/domain/avatar'
+import { modelBadge } from '@/lib/domain/models'
 import type { Screen, ScreenFrame } from '@/lib/domain/screen'
 import type { ChannelSummary } from '@/lib/domain/types'
 
@@ -202,7 +204,7 @@ export function BotPanel({
               <BotAvatar avatar={assistant.avatar} size={64} />
               <h3 className="text-[16px] font-bold text-ink-900">{assistant.name}</h3>
               <span className="rounded-full bg-surface px-2.5 py-1 text-[11px] font-medium text-ink-700">
-                Claude · {assistant.model}
+                {modelBadge(assistant.model)}
               </span>
             </div>
 
@@ -307,6 +309,11 @@ export function BotPanel({
                   )}
                 </label>
               ))}
+              {shellBrowserWarning(tools) && (
+                <p role="alert" className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
+                  {shellBrowserWarning(tools)}
+                </p>
+              )}
             </fieldset>
 
             <label className="flex items-center gap-2 text-[12px]">

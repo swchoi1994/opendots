@@ -60,6 +60,14 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
   },
 ]
 
+export const SHELL_BROWSER_WARNING =
+  'This bot can browse the web and run commands on this computer. A web page could tell it to run commands. Turn both on only for sites you trust.'
+
+/** Browser + Terminal is the combination a web page can turn into commands on the host. */
+export function shellBrowserWarning(tools: readonly ToolName[]): string | null {
+  return tools.includes('shell') && tools.includes('web_browser') ? SHELL_BROWSER_WARNING : null
+}
+
 export interface MemoryConfig {
   enabled: boolean
   /**

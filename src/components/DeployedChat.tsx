@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ChannelAvatar } from './Avatar'
 import { MessageInput } from './MessageInput'
 import { MessageThread } from './MessageThread'
+import { modelBadge } from '@/lib/domain/models'
 import type { ChannelSummary, MessageWithReceipt } from '@/lib/domain/types'
 
 /**
@@ -127,7 +128,7 @@ export function DeployedChat({ channel, deploymentId, allowPosting }: DeployedCh
           <h1 className="truncate text-[17px] font-bold text-ink-900">{channel.name}</h1>
           {channel.assistant && (
             <p className="truncate text-[11px] text-ink-500">
-              Claude · {channel.assistant.model}
+              {modelBadge(channel.assistant.model)}
               {channel.assistant.skillIds.length > 0 &&
                 ` · ${channel.assistant.skillIds.length} skill(s)`}
             </p>
