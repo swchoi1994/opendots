@@ -65,7 +65,8 @@ export function brainEnv(resolved: ResolvedModel, source: NodeJS.ProcessEnv, dat
 
 ### 3.3 Default model and the model list
 
-- `OPENDOTS_DEFAULT_MODEL` replaces `CLAUDE_MODEL`. When it is unset, a new or seeded bot gets `sonnet` if `ANTHROPIC_API_KEY` is set; otherwise the first local Ollama model that lists the `tools` capability; otherwise `sonnet`, and `/api/health` reports that no model is usable.
+- Seeded bots, and new bots that keep the picker's first entry, store the model id `default`. It is resolved each time a turn starts, so adding an API key later moves those bots onto Claude without editing each one. Resolution order: `OPENDOTS_DEFAULT_MODEL` when set (it replaces `CLAUDE_MODEL`); otherwise `sonnet` if `ANTHROPIC_API_KEY` is set; otherwise the first local Ollama model that lists the `tools` capability; otherwise `sonnet`, and `/api/health` reports that no model is usable.
+- The model id table in 3.1 gains a row: `default` resolves as above before anything else happens.
 - New route `GET /api/models` returns `{ id, label, provider, available }[]`: the Claude aliases (`available` only when a key is set) and every local Ollama model with the `tools` capability (read from `GET <OLLAMA_HOST>/api/tags`, 1.5 s timeout; an unreachable Ollama contributes nothing). `ModelSelect` loads this list and keeps its "Other…" free-text entry.
 - Models without tool calling are left out of the list because every bot turn may use tools.
 
@@ -137,7 +138,13 @@ The logic is a pure function, `checkWorkspacePath(tool, input, workspaceDir)`, i
 
 `shell` stays off by default. When a bot has both `shell` and `web_browser`, the bot panel and the new-bot dialog show: "This bot can browse the web and run commands on this computer. A web page could tell it to run commands. Turn both on only for sites you trust." The hook does not confine `Bash`; the README documents that shell access is access to the host.
 
-### 5.4 Trust lists
+### 5.4 Share-link signing secret
+
+Today `deployment-session.ts` reads `DEPLOYMENT_SESSION_SECRET` with `??`, so an empty value (which Compose passes when the variable is unset) becomes an empty HMAC key. Without the variable, it falls back to a guessable `dev-only-<pid>-<time>` string. And `.env.example` ships the fixed value `dev-only-change-me`. After this change:
+- an unset or empty secret falls back to 32 random bytes per process;
+- `.env.example` leaves the line commented out.
+
+### 5.5 Trust lists
 
 | List | Change |
 | --- | --- |
