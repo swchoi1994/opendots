@@ -7,9 +7,13 @@ const nextConfig: NextConfig = {
   // Emits .next/standalone with only the files the server actually needs, so
   // the runtime image does not have to carry node_modules at all.
   output: 'standalone',
-  // The SDK spawns the bundled Claude Code CLI and resolves it relative to its
-  // own package path, which bundling would break. Load it from node_modules.
-  serverExternalPackages: ['@anthropic-ai/claude-agent-sdk'],
+  // Loaded from node_modules, not bundled: the SDK resolves its CLI binary, and
+  // PGlite its WASM and data files, relative to their own package paths.
+  serverExternalPackages: [
+    '@anthropic-ai/claude-agent-sdk',
+    '@electric-sql/pglite',
+    '@electric-sql/pglite-pgvector',
+  ],
 }
 
 export default nextConfig

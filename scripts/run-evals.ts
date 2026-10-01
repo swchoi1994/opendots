@@ -10,6 +10,10 @@ loadEnv(process.cwd())
 // so force dry-run here: the suite never calls a model.
 process.env.BRAIN_DRY_RUN = '1'
 
+// And the in-memory store: the golden set uploads skills as fixtures, which
+// must never land in the operator's real database.
+process.env.DATA_STORE = 'memory'
+
 /**
  * CLI entry point: `pnpm eval`.
  *

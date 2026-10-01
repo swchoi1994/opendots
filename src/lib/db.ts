@@ -1,55 +1,157 @@
-import { Pool } from 'pg'
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { PGlite, types, type Transaction } from '@electric-sql/pglite'
+import { vector } from '@electric-sql/pglite-pgvector'
+import { Pool, type QueryResult } from 'pg'
+import { dataDir } from './data-dir'
+import { migrate } from './migrate'
 
 /**
- * Shared Postgres pool.
- *
- * A pool, not a client: every API route handler runs concurrently, and opening
- * a connection per request exhausts Postgres' connection limit under trivial
- * load. The pool is parked on globalThis for the same reason the in-memory
- * store is — hot reload re-evaluates modules, and a fresh pool per reload leaks
- * connections until the database refuses new ones.
+ * The storage seam under PostgresChatRepository. Both implementations speak
+ * the same SQL: PGlite (Postgres compiled to WASM, embedded, the default) and
+ * a Postgres server through a `pg` pool when DATA_STORE=postgres.
  */
-
-const globalForDb = globalThis as typeof globalThis & { __pgPool?: Pool }
-
-export function isDatabaseConfigured(): boolean {
-  return Boolean(process.env.DATABASE_URL)
+export interface Db {
+  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[]; rowCount: number }>
+  /** Runs a script of several statements with no parameters (migrations). */
+  exec(sql: string): Promise<void>
+  /** Runs `fn` inside one transaction; a throw rolls all of it back. */
+  transaction<T>(fn: (tx: Db) => Promise<T>): Promise<T>
 }
+
+export type StoreKind = 'pglite' | 'postgres' | 'memory'
+
+export function storeKind(env: Partial<NodeJS.ProcessEnv> = process.env): StoreKind {
+  return env.DATA_STORE === 'postgres' || env.DATA_STORE === 'memory' ? env.DATA_STORE : 'pglite'
+}
+
+const noNesting = async (): Promise<never> => {
+  throw new Error('Nested transactions are not supported')
+}
+
+// ---- PGlite -----------------------------------------------------------------
+
+/** int8 stays a string, as node-postgres returns it, so both backends hand the repository identical rows. */
+const PARSERS = { [types.INT8]: (value: string) => value }
+
+/** An embedded database: file-backed under `dir`, or in memory when `dir` is omitted (tests). */
+export async function openPglite(dir?: string): Promise<PGlite> {
+  if (dir) mkdirSync(dir, { recursive: true })
+  return PGlite.create({ ...(dir ? { dataDir: dir } : {}), extensions: { vector }, parsers: PARSERS })
+}
+
+function pgliteHandle(handle: PGlite | Transaction, transaction: Db['transaction']): Db {
+  return {
+    async query<T>(sql: string, params?: unknown[]) {
+      const result = await handle.query<T>(sql, params)
+      return { rows: result.rows, rowCount: result.affectedRows || result.rows.length }
+    },
+    async exec(sql: string) {
+      await handle.exec(sql)
+    },
+    transaction,
+  }
+}
+
+export function pgliteDb(pg: PGlite): Db {
+  return pgliteHandle(pg, (fn) => pg.transaction((tx) => fn(pgliteHandle(tx, noNesting))))
+}
+
+// ---- Postgres server ----------------------------------------------------------
+
+type Queryable = { query(sql: string, params?: unknown[]): Promise<QueryResult> }
+
+function pgHandle(client: Queryable, transaction: Db['transaction']): Db {
+  return {
+    async query<T>(sql: string, params?: unknown[]) {
+      const result = await client.query(sql, params)
+      return { rows: result.rows as T[], rowCount: result.rowCount ?? 0 }
+    },
+    async exec(sql: string) {
+      await client.query(sql)
+    },
+    transaction,
+  }
+}
+
+export function pgDb(pool: Pool): Db {
+  return pgHandle(pool, async (fn) => {
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const result = await fn(pgHandle(client, noNesting))
+      await client.query('COMMIT')
+      return result
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined)
+      throw error
+    } finally {
+      client.release()
+    }
+  })
+}
+
+/*
+ * Parked on globalThis: hot reload re-evaluates modules, a fresh pool per
+ * reload leaks connections, and a second PGlite on the same data directory
+ * would corrupt it.
+ */
+const globalForDb = globalThis as typeof globalThis & { __pgPool?: Pool; __opendotsDb?: Db }
 
 export function getPool(): Pool {
   if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is not set — start the stack with docker compose up')
+    throw new Error('DATABASE_URL is not set: DATA_STORE=postgres needs a Postgres connection string')
   }
-
   globalForDb.__pgPool ??= new Pool({
     connectionString: process.env.DATABASE_URL,
-    // Keep well under Postgres' default max_connections (100) so migrations and
-    // psql sessions can still get in while the app is running.
+    // Well under Postgres' default max_connections (100), so migrations and
+    // psql sessions still get in while the app runs.
     max: 10,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,
   })
-
   return globalForDb.__pgPool
 }
 
-/** Cheap liveness probe — useful in the health endpoint once wired. */
-export async function pingDatabase(): Promise<boolean> {
-  try {
-    const result = await getPool().query('SELECT 1 AS ok')
-    return result.rows[0]?.ok === 1
-  } catch {
-    return false
+/** Opens a backend without migrating it. `close` is for scripts; the app keeps its database for the process lifetime. */
+export async function openDb(
+  kind: 'pglite' | 'postgres' = storeKind() === 'postgres' ? 'postgres' : 'pglite',
+): Promise<{ db: Db; close: () => Promise<void> }> {
+  if (kind === 'postgres') {
+    const pool = getPool()
+    return { db: pgDb(pool), close: () => pool.end() }
+  }
+  const pg = await openPglite(join(dataDir(), 'db'))
+  return { db: pgliteDb(pg), close: () => pg.close() }
+}
+
+/** Defers opening (async) to the first query, so callers get a Db synchronously. */
+function lazyDb(open: () => Promise<Db>): Db {
+  let ready: Promise<Db> | null = null
+  const get = () =>
+    (ready ??= open().catch((error: unknown) => {
+      ready = null // a failed open is retried by the next caller, not cached
+      throw error
+    }))
+  return {
+    async query<T>(sql: string, params?: unknown[]) {
+      return (await get()).query<T>(sql, params)
+    },
+    async exec(sql: string) {
+      return (await get()).exec(sql)
+    },
+    async transaction<T>(fn: (tx: Db) => Promise<T>) {
+      return (await get()).transaction(fn)
+    },
   }
 }
 
-/**
- * Formats a JS number[] as a pgvector literal: '[0.1,0.2,...]'.
- *
- * TODO(intern): decide whether to keep doing this or to use a driver-level type
- * parser. Passing the array directly will NOT work — node-postgres serialises a
- * JS array as a Postgres array `{...}`, which the vector type rejects.
- */
-export function toVectorLiteral(vector: number[]): string {
-  return `[${vector.join(',')}]`
+/** The process-wide database: opened and migrated on first use, so nobody has to run db:init first. */
+export function getDb(): Db {
+  globalForDb.__opendotsDb ??= lazyDb(async () => {
+    const { db } = await openDb()
+    await migrate(db)
+    return db
+  })
+  return globalForDb.__opendotsDb
 }

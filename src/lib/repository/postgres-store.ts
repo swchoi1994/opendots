@@ -14,7 +14,7 @@ import type {
   UserMessage,
 } from '../domain/types'
 import { botUserFor } from '../domain/types'
-import { getPool } from '../db'
+import { getDb, type Db } from '../db'
 import {
   ChannelFrozen,
   ChannelNotFound,
@@ -183,12 +183,15 @@ const CHANNEL_SELECT = `
 export class PostgresChatRepository implements ChatRepository {
   private seeded = false
 
-  private get pool() {
-    return getPool()
+  /** Tests inject an in-memory PGlite; the app uses the process-wide database (PGlite or a server). */
+  constructor(private readonly injected?: Db) {}
+
+  private get db(): Db {
+    return this.injected ?? getDb()
   }
 
   private async requireChannel(channelUrl: string): Promise<{ isFrozen: boolean }> {
-    const { rows } = await this.pool.query<{ is_frozen: boolean }>(
+    const { rows } = await this.db.query<{ is_frozen: boolean }>(
       'SELECT is_frozen FROM channels WHERE channel_url = $1',
       [channelUrl],
     )
@@ -204,58 +207,42 @@ export class PostgresChatRepository implements ChatRepository {
   private async seedIfEmpty(): Promise<void> {
     if (this.seeded || process.env.SEED_BOTS === '0') return
 
-    const client = await this.pool.connect()
-    try {
-      await client.query('BEGIN')
-      // Advisory lock scoped to this transaction: a second concurrent caller
-      // (another request on this instance, or another instance entirely —
-      // `this.seeded` only guards this process) blocks here until the first
-      // commits or rolls back. The COUNT(*) check below therefore runs with
-      // no other seeder able to race it, so "check empty, then insert" is
-      // atomic instead of two separate round trips a second caller could
-      // interleave with.
-      await client.query("SELECT pg_advisory_xact_lock(hashtext('opendots_seed'))")
+    await this.db.transaction(async (tx) => {
+      // Advisory lock scoped to this transaction: a second concurrent seeder
+      // (another request, or another instance on the same server) blocks here
+      // until this one commits, so "check empty, then insert" cannot interleave.
+      await tx.query("SELECT pg_advisory_xact_lock(hashtext('opendots_seed'))")
 
-      const { rows } = await client.query<{ n: string }>('SELECT COUNT(*)::text AS n FROM channels')
-      if (Number(rows[0]?.n ?? '0') > 0) {
-        await client.query('COMMIT')
-        this.seeded = true
-        return
-      }
+      const { rows } = await tx.query<{ n: string }>('SELECT COUNT(*)::text AS n FROM channels')
+      if (Number(rows[0]?.n ?? '0') > 0) return
 
       for (const entry of ROSTER) {
         const channelUrl = channelUrlFor(entry.slug)
         const assistant = rosterAssistant(entry)
         const bot = botUserFor(channelUrl, assistant)
-        await client.query(
+        await tx.query(
           `INSERT INTO channels (channel_url, name, member_count, is_frozen, assistant)
            VALUES ($1, $2, 2, FALSE, $3) ON CONFLICT (channel_url) DO NOTHING`,
           [channelUrl, entry.name, JSON.stringify(assistant)],
         )
-        await client.query(
+        await tx.query(
           `INSERT INTO messages (channel_url, sender_id, sender_name, body, message_type)
            VALUES ($1, $2, $3, $4, 'user')`,
           [channelUrl, bot.userId, bot.nickname, entry.intro],
         )
-        await client.query(
+        await tx.query(
           `INSERT INTO read_receipts (channel_url, user_id, read_at) VALUES ($1, $2, NOW()), ($1, $3, NOW())
            ON CONFLICT (channel_url, user_id) DO UPDATE SET read_at = EXCLUDED.read_at`,
           [channelUrl, me.userId, bot.userId],
         )
       }
-      await client.query('COMMIT')
-    } catch (error) {
-      await client.query('ROLLBACK')
-      throw error
-    } finally {
-      client.release()
-    }
+    })
     this.seeded = true
   }
 
   async listChannels(): Promise<ChannelSummary[]> {
     await this.seedIfEmpty()
-    const { rows } = await this.pool.query<ChannelRow>(
+    const { rows } = await this.db.query<ChannelRow>(
       `${CHANNEL_SELECT} ORDER BY COALESCE(m.created_at, c.created_at) DESC`,
       [me.userId],
     )
@@ -263,7 +250,7 @@ export class PostgresChatRepository implements ChatRepository {
   }
 
   async getChannel(channelUrl: string): Promise<ChannelSummary | null> {
-    const { rows } = await this.pool.query<ChannelRow>(
+    const { rows } = await this.db.query<ChannelRow>(
       `${CHANNEL_SELECT} WHERE c.channel_url = $2`,
       [me.userId, channelUrl],
     )
@@ -272,7 +259,7 @@ export class PostgresChatRepository implements ChatRepository {
 
   async listMessages(channelUrl: string): Promise<MessageWithReceipt[] | null> {
     // Null (no channel) vs [] (channel, no messages) — the routes map that to 404 vs 200.
-    const exists = await this.pool.query('SELECT 1 FROM channels WHERE channel_url = $1', [channelUrl])
+    const exists = await this.db.query('SELECT 1 FROM channels WHERE channel_url = $1', [channelUrl])
     if (exists.rows.length === 0) return null
 
     const channel = await this.getChannel(channelUrl)
@@ -280,11 +267,11 @@ export class PostgresChatRepository implements ChatRepository {
     const members = bot ? [me, bot] : [me]
 
     const [{ rows: messages }, { rows: receipts }] = await Promise.all([
-      this.pool.query<MessageRow>(
+      this.db.query<MessageRow>(
         'SELECT * FROM messages WHERE channel_url = $1 ORDER BY created_at ASC, message_id ASC',
         [channelUrl],
       ),
-      this.pool.query<{ user_id: string; read_at: Date }>(
+      this.db.query<{ user_id: string; read_at: Date }>(
         'SELECT user_id, read_at FROM read_receipts WHERE channel_url = $1',
         [channelUrl],
       ),
@@ -309,7 +296,7 @@ export class PostgresChatRepository implements ChatRepository {
     const trimmed = text.trim()
     if (!trimmed) throw EmptyMessage()
 
-    const { rows } = await this.pool.query<MessageRow>(
+    const { rows } = await this.db.query<MessageRow>(
       `INSERT INTO messages (channel_url, sender_id, sender_name, body, message_type)
        VALUES ($1, $2, $3, $4, 'user')
        RETURNING message_id, channel_url, sender_id, sender_name, body, provenance, created_at`,
@@ -329,7 +316,7 @@ export class PostgresChatRepository implements ChatRepository {
     const channel = await this.getChannel(channelUrl)
     if (!channel) throw ChannelNotFound(channelUrl)
     const bot = channel.assistant ? botUserFor(channelUrl, channel.assistant) : me
-    const { rows } = await this.pool.query<MessageRow>(
+    const { rows } = await this.db.query<MessageRow>(
       `INSERT INTO messages (channel_url, sender_id, sender_name, body, message_type, provenance)
        VALUES ($1, $2, $3, $4, 'user', $5)
        RETURNING message_id, channel_url, sender_id, sender_name, body, provenance, created_at`,
@@ -351,7 +338,7 @@ export class PostgresChatRepository implements ChatRepository {
   // stored at microsecond precision, so a ms-truncated receipt would leave the
   // just-read message counting as still-unread.
   private async setReadReceipt(channelUrl: string, userId: string): Promise<void> {
-    await this.pool.query(
+    await this.db.query(
       `INSERT INTO read_receipts (channel_url, user_id, read_at)
        VALUES ($1, $2, NOW())
        ON CONFLICT (channel_url, user_id) DO UPDATE SET read_at = EXCLUDED.read_at`,
@@ -370,7 +357,7 @@ export class PostgresChatRepository implements ChatRepository {
     if (!name) throw EmptyChannelName()
 
     const channelUrl = `channel_assistant_${randomBytes(6).toString('hex')}`
-    await this.pool.query(
+    await this.db.query(
       `INSERT INTO channels (channel_url, name, member_count, is_frozen, assistant)
        VALUES ($1, $2, 2, FALSE, $3)`,
       [channelUrl, name, JSON.stringify(input.assistant)],
@@ -382,7 +369,7 @@ export class PostgresChatRepository implements ChatRepository {
   async updateAssistant(channelUrl: string, assistant: AssistantConfig): Promise<ChannelSummary> {
     // The name travels with the config: the channel name is what the sidebar
     // renders, so updating only the JSON made a rename half-apply.
-    const { rowCount } = await this.pool.query(
+    const { rowCount } = await this.db.query(
       'UPDATE channels SET assistant = $2, name = $3 WHERE channel_url = $1',
       [channelUrl, JSON.stringify(assistant), assistant.name],
     )
@@ -392,7 +379,7 @@ export class PostgresChatRepository implements ChatRepository {
 
   async deleteChannel(channelUrl: string): Promise<void> {
     // ON DELETE CASCADE removes the channel's messages, receipts, deployment and bot session.
-    const { rowCount } = await this.pool.query('DELETE FROM channels WHERE channel_url = $1', [channelUrl])
+    const { rowCount } = await this.db.query('DELETE FROM channels WHERE channel_url = $1', [channelUrl])
     if (!rowCount) throw ChannelNotFound(channelUrl)
     removeWorkspace(channelUrl)
     // Deleting can empty the table, and `seeded` is what stops the lazy roster
@@ -402,9 +389,9 @@ export class PostgresChatRepository implements ChatRepository {
   }
 
   async deleteAllChannels(): Promise<number> {
-    const { rows } = await this.pool.query<{ channel_url: string }>('SELECT channel_url FROM channels')
+    const { rows } = await this.db.query<{ channel_url: string }>('SELECT channel_url FROM channels')
     for (const r of rows) removeWorkspace(r.channel_url)
-    const { rowCount } = await this.pool.query('DELETE FROM channels')
+    const { rowCount } = await this.db.query('DELETE FROM channels')
     // The table is now empty by construction: the next request must be allowed
     // to re-seed the roster.
     this.seeded = false
@@ -420,7 +407,7 @@ export class PostgresChatRepository implements ChatRepository {
 
     // Deploying twice must return the SAME id — the no-op UPDATE returns the
     // existing row rather than minting a new one (unique index on channel_url).
-    const { rows } = await this.pool.query<{
+    const { rows } = await this.db.query<{
       deployment_id: string
       channel_url: string
       passcode: string
@@ -444,7 +431,7 @@ export class PostgresChatRepository implements ChatRepository {
   }
 
   async getDeployment(deploymentId: string): Promise<Deployment | null> {
-    const { rows } = await this.pool.query<{
+    const { rows } = await this.db.query<{
       deployment_id: string
       channel_url: string
       passcode: string
@@ -466,7 +453,7 @@ export class PostgresChatRepository implements ChatRepository {
   }
 
   async getBotSession(channelUrl: string): Promise<string | null> {
-    const { rows } = await this.pool.query<{ session_id: string }>(
+    const { rows } = await this.db.query<{ session_id: string }>(
       'SELECT session_id FROM bot_sessions WHERE channel_url = $1',
       [channelUrl],
     )
@@ -475,7 +462,7 @@ export class PostgresChatRepository implements ChatRepository {
 
   async setBotSession(channelUrl: string, sessionId: string): Promise<void> {
     await this.requireChannel(channelUrl)
-    await this.pool.query(
+    await this.db.query(
       `INSERT INTO bot_sessions (channel_url, session_id, updated_at) VALUES ($1, $2, NOW())
        ON CONFLICT (channel_url) DO UPDATE SET session_id = EXCLUDED.session_id, updated_at = NOW()`,
       [channelUrl, sessionId],
@@ -483,11 +470,11 @@ export class PostgresChatRepository implements ChatRepository {
   }
 
   async clearBotSession(channelUrl: string): Promise<void> {
-    await this.pool.query('DELETE FROM bot_sessions WHERE channel_url = $1', [channelUrl])
+    await this.db.query('DELETE FROM bot_sessions WHERE channel_url = $1', [channelUrl])
   }
 
   async appendScreen(input: NewScreen): Promise<Screen> {
-    const { rows } = await this.pool.query<ScreenRow>(
+    const { rows } = await this.db.query<ScreenRow>(
       `INSERT INTO screens (channel_url, turn_id, step, action, target, intent, url, title, image_path, annotations, flagged)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
@@ -518,6 +505,17 @@ export class PostgresChatRepository implements ChatRepository {
    * it a DESC page is equivalent to feeding it an ASC one, and it is the same
    * function the memory store uses: turn order is never derived per backend.
    * The final slice trims the group pass back to `limit`.
+   *
+   * `screen_id` (an insertion-ordered BIGSERIAL) is a required third sort key,
+   * not cosmetic: two different turns' first screens can share one
+   * `created_at` — PGlite's clock is millisecond-resolution, so two awaited
+   * inserts issued back to back (no network round trip between them) land in
+   * the same millisecond far more often than over a real Postgres connection.
+   * Without a tiebreaker, Postgres' sort is free to return that tied pair in
+   * either order, which `groupScreensByTurn`'s *stable* sort then preserves
+   * as whichever turn "started first" — flipping the result between runs.
+   * `screen_id ASC` breaks the tie the same way the memory store always has:
+   * by true insertion order.
    */
   async listScreens(
     channelUrl: string,
@@ -531,9 +529,9 @@ export class PostgresChatRepository implements ChatRepository {
       query += ` AND turn_id = $${params.length}`
     }
     params.push(limit)
-    query += ` ORDER BY created_at DESC, step ASC LIMIT $${params.length}`
+    query += ` ORDER BY created_at DESC, step ASC, screen_id ASC LIMIT $${params.length}`
 
-    const { rows } = await this.pool.query<ScreenRow>(query, params)
+    const { rows } = await this.db.query<ScreenRow>(query, params)
     return groupScreensByTurn(rows.map(rowToScreen)).slice(0, limit)
   }
 
@@ -542,7 +540,7 @@ export class PostgresChatRepository implements ChatRepository {
     screenId: number,
     opts: { attachedOnly?: boolean } = {},
   ): Promise<string | null> {
-    const { rows } = await this.pool.query<{ image_path: string | null }>(
+    const { rows } = await this.db.query<{ image_path: string | null }>(
       `SELECT image_path FROM screens WHERE channel_url = $1 AND screen_id = $2${
         opts.attachedOnly ? ' AND message_id IS NOT NULL' : ''
       }`,
@@ -552,14 +550,14 @@ export class PostgresChatRepository implements ChatRepository {
   }
 
   async attachScreensToMessage(channelUrl: string, turnId: string, messageId: number): Promise<void> {
-    await this.pool.query(
+    await this.db.query(
       'UPDATE screens SET message_id = $3 WHERE channel_url = $1 AND turn_id = $2',
       [channelUrl, turnId, messageId],
     )
   }
 
   async listSkills(): Promise<Skill[]> {
-    const { rows } = await this.pool.query<{
+    const { rows } = await this.db.query<{
       skill_id: string
       name: string
       description: string
@@ -578,7 +576,7 @@ export class PostgresChatRepository implements ChatRepository {
   }
 
   async listSkillIds(): Promise<string[]> {
-    const { rows } = await this.pool.query<{ skill_id: string }>(
+    const { rows } = await this.db.query<{ skill_id: string }>(
       'SELECT skill_id FROM skills ORDER BY skill_id',
     )
     return rows.map((row) => row.skill_id)
@@ -601,7 +599,7 @@ export class PostgresChatRepository implements ChatRepository {
       uploadedAt: Date.now(),
     }
 
-    await this.pool.query(
+    await this.db.query(
       `INSERT INTO skills (skill_id, name, description, body, file_name)
        VALUES ($1, $2, $3, $4, $5)`,
       [skill.id, skill.name, skill.description, skill.body, skill.fileName],
@@ -612,7 +610,7 @@ export class PostgresChatRepository implements ChatRepository {
 
   async deleteSkill(skillId: string): Promise<void> {
     // ON DELETE CASCADE drops the skill's chunks with it.
-    const { rowCount } = await this.pool.query('DELETE FROM skills WHERE skill_id = $1', [skillId])
+    const { rowCount } = await this.db.query('DELETE FROM skills WHERE skill_id = $1', [skillId])
     if (!rowCount) throw SkillNotFound(skillId)
   }
 }
