@@ -36,15 +36,17 @@ export function repositoryContract(label: string, getRepo: () => Promise<ChatRep
     assert.equal(reply.sender.colorToken, 'green')
   })
 
-  test(`${label}: bot sessions are stored per channel and cleared on delete`, async () => {
+  test(`${label}: bot sessions are stored per channel with the provider that made them, and cleared on delete`, async () => {
     const repo = await getRepo()
     const created = await repo.createChannel({ name: 'Temp', assistant: (await repo.listChannels())[0]!.assistant! })
     assert.equal(await repo.getBotSession(created.channelUrl), null)
-    await repo.setBotSession(created.channelUrl, 'sess-1')
-    assert.equal(await repo.getBotSession(created.channelUrl), 'sess-1')
+    await repo.setBotSession(created.channelUrl, 'sess-1', 'ollama')
+    assert.deepEqual(await repo.getBotSession(created.channelUrl), { sessionId: 'sess-1', provider: 'ollama' })
+    await repo.setBotSession(created.channelUrl, 'sess-2', 'anthropic')
+    assert.deepEqual(await repo.getBotSession(created.channelUrl), { sessionId: 'sess-2', provider: 'anthropic' })
     await repo.clearBotSession(created.channelUrl)
     assert.equal(await repo.getBotSession(created.channelUrl), null)
-    await repo.setBotSession(created.channelUrl, 'sess-2')
+    await repo.setBotSession(created.channelUrl, 'sess-3', 'ollama')
     await repo.deleteChannel(created.channelUrl)
     assert.equal(await repo.getBotSession(created.channelUrl), null)
   })

@@ -94,7 +94,7 @@ test('a stale session is cleared and the turn retried on a fresh one', async (t)
   setEnv(t, 'BRAIN_DRY_RUN', undefined)
   useTempWorkspaces(t)
 
-  await memoryRepository.setBotSession(CHANNEL, 'stale')
+  await memoryRepository.setBotSession(CHANNEL, 'stale', 'anthropic')
   await memoryRepository.sendMessage(CHANNEL, 'and the other one?')
 
   const brain = fakeBrain([
@@ -119,7 +119,7 @@ test('a stale session is cleared and the turn retried on a fresh one', async (t)
     `trace did not record the reset: ${trace.trace.map((e) => e.detail).join(' | ')}`,
   )
 
-  assert.equal(await memoryRepository.getBotSession(CHANNEL), 'fresh-1')
+  assert.deepEqual(await memoryRepository.getBotSession(CHANNEL), { sessionId: 'fresh-1', provider: 'anthropic' })
 
   const done = events.find((event) => event.type === 'done')
   assert.ok(done && done.type === 'done')
@@ -353,4 +353,49 @@ test('no CLI product name reaches the thread, even after a partial answer', asyn
   assert.ok(done?.type === 'done' && done.message.messageType === 'user')
   assert.ok(done.message.message.startsWith('Here is the first half'))
   assert.doesNotMatch(done.message.message, /claude[ -]?code/i)
+})
+
+test('a session is resumed only by the provider that created it', async (t) => {
+  setEnv(t, 'BRAIN_DRY_RUN', undefined)
+  useTempWorkspaces(t)
+  const created = await memoryRepository.createChannel({
+    name: 'Switching Bot',
+    assistant: { ...DEFAULT_ASSISTANT, name: 'Switching Bot', memory: { enabled: true, windowMessages: 10 } },
+  })
+  const url = created.channelUrl
+  const reply = (sessionId: string): BotEvent[] => [
+    { type: 'session', sessionId },
+    { type: 'text', delta: 'ok' },
+    { type: 'result', text: 'ok', sessionId, costUsd: null, turns: 1 },
+  ]
+
+  // Turn 1 runs on Ollama (no key yet) and stores an Ollama session.
+  await memoryRepository.sendMessage(url, 'first')
+  const local = fakeBrain([reply('ollama-sess')])
+  await collect(runBotTurn(await loadTurnContext(url), {}, { runBot: local.fn, resolveDefaultModel: async () => 'ollama/qwq:latest' }))
+  assert.deepEqual(await memoryRepository.getBotSession(url), { sessionId: 'ollama-sess', provider: 'ollama' })
+
+  // Turn 2, same provider: resumed.
+  await memoryRepository.sendMessage(url, 'second')
+  const again = fakeBrain([reply('ollama-sess')])
+  await collect(runBotTurn(await loadTurnContext(url), {}, { runBot: again.fn, resolveDefaultModel: async () => 'ollama/qwq:latest' }))
+  assert.equal(again.calls[0]?.sessionId, 'ollama-sess')
+
+  // A key is added, so "default" now means Claude: the Ollama session must not be resumed.
+  await memoryRepository.sendMessage(url, 'third')
+  const claude = fakeBrain([reply('claude-sess')])
+  const events = await collect(runBotTurn(await loadTurnContext(url), {}, { runBot: claude.fn, resolveDefaultModel: async () => 'sonnet' }))
+  assert.equal(claude.calls[0]?.model, 'sonnet')
+  assert.equal(claude.calls[0]?.sessionId, null, 'a fresh session, not the Ollama one')
+  const trace = events.find((event) => event.type === 'trace')
+  assert.ok(trace?.type === 'trace')
+  assert.ok(
+    trace.trace.some((entry) => entry.detail === 'provider changed (ollama → anthropic), starting a fresh session'),
+    `trace: ${trace.trace.map((e) => e.detail).join(' | ')}`,
+  )
+  assert.ok(
+    !trace.trace.some((entry) => entry.detail.includes('session resumed')),
+    'a fresh session replays memory instead of skipping it',
+  )
+  assert.deepEqual(await memoryRepository.getBotSession(url), { sessionId: 'claude-sess', provider: 'anthropic' })
 })

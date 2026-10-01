@@ -9,7 +9,7 @@ import { migrate } from './migrate'
 test('migrate applies every db/*.sql once and records each file', async () => {
   const db = pgliteDb(await openPglite())
   const first = await migrate(db)
-  assert.deepEqual(first, ['001_init.sql', '002_bots.sql', '003_screens.sql'])
+  assert.deepEqual(first, ['001_init.sql', '002_bots.sql', '003_screens.sql', '004_session_provider.sql'])
   assert.deepEqual(await migrate(db), [], 'a second run applies nothing')
 
   const { rows } = await db.query<{ name: string }>('SELECT name FROM schema_migrations ORDER BY name')

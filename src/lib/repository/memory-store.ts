@@ -12,6 +12,7 @@ import {
   EmptyMessage,
   InvalidSkill,
   SkillNotFound,
+  type BotSession,
   type ChatRepository,
   type CreateChannelInput,
   type Deployment,
@@ -35,8 +36,8 @@ interface Store {
   /** deployment id -> channelUrl, plus the reverse lookup to keep ids stable. */
   deployments: Map<string, Deployment>
   deploymentsByChannel: Map<string, string>
-  /** channelUrl -> Agent SDK session id. */
-  botSessions: Map<string, string>
+  /** channelUrl -> Agent SDK session and the provider that made it. */
+  botSessions: Map<string, BotSession>
   /** channelUrl -> screen frames captured during the bot's browser turns. */
   screens: Map<string, Screen[]>
   /** screenId -> the frame's JPEG path on disk; kept separate so it never leaks into a Screen returned to a caller. */
@@ -289,11 +290,12 @@ export const memoryRepository: ChatRepository = {
   },
 
   async getBotSession(channelUrl) {
-    return store().botSessions.get(channelUrl) ?? null
+    const session = store().botSessions.get(channelUrl)
+    return session ? { ...session } : null
   },
-  async setBotSession(channelUrl, sessionId) {
+  async setBotSession(channelUrl, sessionId, provider) {
     requireChannel(channelUrl)
-    store().botSessions.set(channelUrl, sessionId)
+    store().botSessions.set(channelUrl, { sessionId, provider })
   },
   async clearBotSession(channelUrl) {
     store().botSessions.delete(channelUrl)

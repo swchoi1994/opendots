@@ -7,7 +7,7 @@ import { browserFor } from '../../browser/agent-browser'
 import { getRepository } from '../../repository'
 import type { ChatRepository } from '../../repository/chat-repository'
 import { workspaceFor } from '../../bots/workspace'
-import { DEFAULT_MODEL_ID } from '../../domain/models'
+import { DEFAULT_MODEL_ID, resolveModel, type ProviderId } from '../../domain/models'
 import { runBot, withoutCliName, type BotErrorKind } from '../brain'
 import { resolveDefaultModel } from '../model-catalog'
 import { getAiConfig } from '../config'
@@ -65,6 +65,8 @@ export interface TurnContext {
   transcript: string
   memory: MemoryTurn[]
   sessionId: string | null
+  /** The provider that created `sessionId`; null when unknown. Only that provider may resume it. */
+  sessionProvider: ProviderId | null
   trigger: TurnTrigger
 }
 
@@ -130,14 +132,25 @@ export async function loadTurnContext(
     )
     .join('\n')
 
+  const session = await repo.getBotSession(channelUrl)
   return {
     channelUrl,
     assistant: channel.assistant,
     question: last.message.message,
     transcript,
     memory,
-    sessionId: await repo.getBotSession(channelUrl),
+    sessionId: session?.sessionId ?? null,
+    sessionProvider: session?.provider ?? null,
     trigger,
+  }
+}
+
+/** The provider a concrete model id runs on, or null for an id runBot will refuse anyway. */
+function providerOf(model: string): ProviderId | null {
+  try {
+    return resolveModel(model).provider
+  } catch {
+    return null
   }
 }
 
@@ -168,6 +181,27 @@ export async function* runBotTurn(
   const pendingScreens: Screen[] = []
 
   try {
+    /*
+     * The concrete model, and so the provider, is settled before planning: a
+     * session is resumed only by the provider that created it (an Ollama
+     * transcript breaks an Anthropic run), and the planner replays memory
+     * exactly when no session is resumed.
+     */
+    let model = assistant.model
+    let resume: string | null = ctx.sessionId
+    const preTrace: string[] = []
+    if (!config.brain.dryRun) {
+      if (model === DEFAULT_MODEL_ID) {
+        model = await (deps.resolveDefaultModel ?? resolveDefaultModel)()
+        preTrace.push(`default model resolved to ${model}`)
+      }
+      const provider = providerOf(model)
+      if (resume && provider && ctx.sessionProvider !== provider) {
+        preTrace.push(`provider changed (${ctx.sessionProvider ?? 'unknown'} → ${provider}), starting a fresh session`)
+        resume = null
+      }
+    }
+
     const plan = await planBotTurn({
       question: ctx.question,
       channelUrl,
@@ -175,10 +209,10 @@ export async function* runBotTurn(
       memory: ctx.memory,
       bot: assistant,
       skillIds: assistant.skillIds,
-      hasSession: ctx.sessionId !== null,
+      hasSession: resume !== null,
       restrictedTools: ctx.trigger === 'deployment_visitor' ? VISITOR_RESTRICTED_TOOLS : [],
     })
-    const trace: TraceEntry[] = [...plan.trace]
+    const trace: TraceEntry[] = [...plan.trace, ...preTrace.map((detail) => ({ node: plan.route, detail }))]
     const retrieved: RetrievedChunk[] = [...plan.context]
     const installed: string[] = []
 
@@ -197,11 +231,7 @@ export async function* runBotTurn(
       }
     } else {
       const workspaceDir = workspaceFor(channelUrl)
-      const model =
-        assistant.model === DEFAULT_MODEL_ID
-          ? await (deps.resolveDefaultModel ?? resolveDefaultModel)()
-          : assistant.model
-      if (model !== assistant.model) trace.push({ node: plan.route, detail: `default model resolved to ${model}` })
+      const provider = providerOf(model)
       const onScreen = async (capture: ScreenCapture) => {
         const screen = await persistScreen(repo, channelUrl, turnId, capture).catch((error) => {
           // A frame that cannot be stored must never fail the browsing turn, but
@@ -232,7 +262,6 @@ export async function* runBotTurn(
         browser,
       })
 
-      let resume: string | null = ctx.sessionId
       for (let attempt = 0; attempt < 2; attempt++) {
         let newSessionId: string | null = null
         failure = null
@@ -295,7 +324,7 @@ export async function* runBotTurn(
           resume = null
           continue
         }
-        if (newSessionId) await repo.setBotSession(channelUrl, newSessionId)
+        if (newSessionId && provider) await repo.setBotSession(channelUrl, newSessionId, provider)
         break
       }
     }

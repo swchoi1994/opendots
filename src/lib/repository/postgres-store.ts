@@ -14,6 +14,7 @@ import type {
   UserMessage,
 } from '../domain/types'
 import { botUserFor } from '../domain/types'
+import type { ProviderId } from '../domain/models'
 import { getDb, type Db } from '../db'
 import {
   ChannelFrozen,
@@ -22,6 +23,7 @@ import {
   EmptyMessage,
   InvalidSkill,
   SkillNotFound,
+  type BotSession,
   type ChatRepository,
   type CreateChannelInput,
   type CreateSkillInput,
@@ -452,20 +454,24 @@ export class PostgresChatRepository implements ChatRepository {
     }
   }
 
-  async getBotSession(channelUrl: string): Promise<string | null> {
-    const { rows } = await this.db.query<{ session_id: string }>(
-      'SELECT session_id FROM bot_sessions WHERE channel_url = $1',
+  async getBotSession(channelUrl: string): Promise<BotSession | null> {
+    const { rows } = await this.db.query<{ session_id: string; provider: string | null }>(
+      'SELECT session_id, provider FROM bot_sessions WHERE channel_url = $1',
       [channelUrl],
     )
-    return rows[0]?.session_id ?? null
+    const row = rows[0]
+    if (!row) return null
+    const provider = row.provider === 'anthropic' || row.provider === 'ollama' ? row.provider : null
+    return { sessionId: row.session_id, provider }
   }
 
-  async setBotSession(channelUrl: string, sessionId: string): Promise<void> {
+  async setBotSession(channelUrl: string, sessionId: string, provider: ProviderId): Promise<void> {
     await this.requireChannel(channelUrl)
     await this.db.query(
-      `INSERT INTO bot_sessions (channel_url, session_id, updated_at) VALUES ($1, $2, NOW())
-       ON CONFLICT (channel_url) DO UPDATE SET session_id = EXCLUDED.session_id, updated_at = NOW()`,
-      [channelUrl, sessionId],
+      `INSERT INTO bot_sessions (channel_url, session_id, provider, updated_at) VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (channel_url) DO UPDATE
+         SET session_id = EXCLUDED.session_id, provider = EXCLUDED.provider, updated_at = NOW()`,
+      [channelUrl, sessionId, provider],
     )
   }
 
