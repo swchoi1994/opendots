@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from 'node:fs'
+import { lstatSync, readlinkSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { HookCallback } from '@anthropic-ai/claude-agent-sdk'
@@ -10,12 +10,23 @@ import type { HookCallback } from '@anthropic-ai/claude-agent-sdk'
  * approved before `canUseTool` is ever consulted, so a path check there would
  * silently never run for a granted tool. Hooks run first, on every call.
  *
+ * It also keeps a bot from rewriting its own configuration. `runBot` loads
+ * the workspace's project settings (`settingSources: ['project']`), and a
+ * `.claude/settings.json` there can run hooks as shell commands and point
+ * ANTHROPIC_BASE_URL elsewhere through its `env` block, so a bot that could
+ * write it would have a shell and the operator's key. Reads stay allowed; only
+ * OpenDots' own server-side code (install_skill) writes under `.claude/`.
+ *
  * Bash is deliberately not covered: a shell can reach anything the server
  * user can, which is why `shell` is off by default and documented as host access.
  */
 
 export const GUARDED_TOOLS = ['Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep'] as const
 export const OUTSIDE_WORKSPACE = 'Bots can only use files inside their own workspace.'
+export const CONFIG_FILE = "Bots can't change their own configuration files."
+
+/** The guarded tools that create or change files. */
+const WRITING_TOOLS: readonly string[] = ['Write', 'Edit', 'NotebookEdit']
 
 const GLOB_CHARS = /[*?[\]{}]/
 
@@ -24,17 +35,67 @@ function expandHome(path: string): string {
   return path === '~' || path.startsWith('~/') ? join(homedir(), path.slice(1)) : path
 }
 
-/** realpath of the nearest existing ancestor with the missing tail re-attached, so new files resolve too. */
-function realpathNearest(path: string): string {
+const MAX_LINK_HOPS = 40
+
+function lexists(path: string): boolean {
+  try {
+    lstatSync(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * realpath of the nearest existing ancestor with the missing tail re-attached,
+ * so new files resolve too. A dangling symlink counts as existing and is
+ * followed by hand: Write creates its target, so the target is what is judged.
+ * Throws on a link loop, which the hook turns into a denial.
+ */
+function realpathNearest(path: string, hops = 0): string {
+  if (hops > MAX_LINK_HOPS) throw new Error('too many symbolic links')
   let current = path
   const tail: string[] = []
-  while (!existsSync(current)) {
+  while (!lexists(current)) {
     const parent = dirname(current)
     if (parent === current) break
     tail.unshift(basename(current))
     current = parent
   }
-  return join(realpathSync(current), ...tail)
+  try {
+    return join(realpathSync(current), ...tail)
+  } catch {
+    const target = resolve(dirname(current), readlinkSync(current))
+    return realpathNearest(join(target, ...tail), hops + 1)
+  }
+}
+
+/**
+ * Windows ignores trailing dots and spaces in a name and treats `name::$DATA`
+ * (an NTFS stream) as the file itself; darwin and win32 file systems are
+ * case-insensitive by default. Elsewhere names compare exactly.
+ */
+function sameNameAs(platform: NodeJS.Platform): (segment: string) => string {
+  if (platform === 'win32') return (segment) => segment.replace(/:.*$/, '').replace(/[. ]+$/, '').toLowerCase()
+  if (platform === 'darwin') return (segment) => segment.toLowerCase()
+  return (segment) => segment
+}
+
+/**
+ * True for what the CLI loads as configuration or instructions: anything under
+ * a `.claude` directory (settings, skills, agents, commands, hooks), the
+ * project's `.mcp.json`, and CLAUDE.md or CLAUDE.local.md. The CLI also picks
+ * up CLAUDE.md files and `.claude` directories below its working directory, so
+ * those match at any depth; `.mcp.json` is only read at the project root.
+ */
+export function isConfigPath(root: string, realPath: string, platform: NodeJS.Platform = process.platform): boolean {
+  const normal = sameNameAs(platform)
+  const segments = relative(root, realPath).split(sep).filter(Boolean).map(normal)
+  if (segments.length === 0) return false
+  if (segments.includes(normal('.claude'))) return true
+  const name = segments[segments.length - 1]
+  if (name === normal('CLAUDE.md') || name === normal('CLAUDE.local.md')) return true
+  return segments.length === 1 && name === normal('.mcp.json')
 }
 
 function isInside(root: string, candidate: string): boolean {
@@ -57,6 +118,7 @@ export function checkWorkspacePath(
   tool: string,
   input: unknown,
   workspaceDir: string,
+  platform: NodeJS.Platform = process.platform,
 ): { ok: true } | { ok: false; reason: string } {
   if (!(GUARDED_TOOLS as readonly string[]).includes(tool)) return { ok: true }
   const denied = { ok: false as const, reason: OUTSIDE_WORKSPACE }
@@ -77,7 +139,9 @@ export function checkWorkspacePath(
   }
 
   for (const candidate of candidates) {
-    if (!isInside(root, realpathNearest(candidate))) return denied
+    const real = realpathNearest(candidate)
+    if (!isInside(root, real)) return denied
+    if (WRITING_TOOLS.includes(tool) && isConfigPath(root, real, platform)) return { ok: false, reason: CONFIG_FILE }
   }
   return { ok: true }
 }

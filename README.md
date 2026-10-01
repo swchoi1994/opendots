@@ -11,7 +11,7 @@ OpenDots is inspired by xAI's Grok Bot and OpenAI's Dots, and it is open source 
 - **Hold a role.** Nine starter bots (Chief of Staff, EA, Inbox Manager, Sales Outbound, Talent Scout, Growth Marketer, Customer Support, Expense Manager, Invoice Collector), each with a short role prompt you can rewrite. Make your own with **+**.
 - **Keep context.** Every bot keeps its own agent session, which survives a restart.
 - **Use a real browser.** With the Browser tool a bot drives its own Chromium session. Every action is screenshotted into a timeline in the Screen tab, and you can switch to a visible window to watch or take over.
-- **Work with files.** Each bot has a private workspace folder, and its file tools can't reach outside it.
+- **Work with files.** Each bot has a private workspace folder. Its file tools can't reach outside it, and they can't change the bot's own configuration.
 - **Pick up skills.** A bot that lacks a capability can search [skills.sh](https://skills.sh) and install a skill into its own workspace.
 - **Search your documents.** Upload Markdown documents for a bot to search before it answers.
 - **Be shared.** Share one conversation behind a link and a passcode.
@@ -57,7 +57,8 @@ OpenDots doesn't sign in with a Claude.ai subscription. Bots run on the Anthropi
 OpenDots runs agents that act on your computer. These are the boundaries:
 
 - **Local only.** `pnpm dev` and `pnpm start` listen on `127.0.0.1`. There is no sign-in yet, so anyone who can reach the port controls every bot. Don't expose an instance to a network until sign-in ships.
-- **Files stay in the workspace.** Every call to Read, Write, Edit, Glob and Grep is checked, and a path outside the bot's workspace folder is refused, including one that leaves through a symlink or `~`.
+- **Files stay in the workspace.** Every call to Read, Write, Edit, NotebookEdit, Glob and Grep is checked, and a path outside the bot's workspace folder is refused, including one that leaves through a symlink or `~`.
+- **Bots can't change their own configuration.** Write, Edit and NotebookEdit are refused for the workspace's `.claude/` folder (settings, skills, agents, commands, hooks), `.mcp.json`, `CLAUDE.md` and `CLAUDE.local.md`, including through a symlink or, on macOS and Windows, a different letter case. Those files decide what a bot's process runs, so a bot that could write them could give itself a shell. Bots can still read them, and skills still install through the Find and install skills tool.
 - **Terminal means host access.** Shell commands run as your user and aren't confined. The Terminal tool is off by default, and the app warns when a bot has both Terminal and Browser.
 - **Web pages are untrusted input.** Text a bot reads on a page can carry instructions. Keep a browsing bot's other tools to a minimum.
 - **Secrets stay with the server.** A bot's process gets basic variables (`PATH`, `HOME`) and the credentials for its own model, nothing else. Database URLs and the share-link secret are withheld.

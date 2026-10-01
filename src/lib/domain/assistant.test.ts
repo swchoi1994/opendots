@@ -13,6 +13,7 @@ test('parseAssistantConfig fills name and avatar, defaults the model, and drops 
 test('the Files tool says it is confined to the workspace', () => {
   const files = TOOL_CATALOG.find((t) => t.id === 'files')
   assert.match(files?.description ?? '', /inside the bot's own workspace/)
+  assert.match(files?.description ?? '', /can't change its own configuration/)
 })
 
 test('parseAssistantConfig drops tools that are not grantable', () => {

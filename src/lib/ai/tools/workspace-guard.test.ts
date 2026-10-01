@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
-import { OUTSIDE_WORKSPACE, checkWorkspacePath, workspaceGuardHook } from './workspace-guard'
+import { CONFIG_FILE, OUTSIDE_WORKSPACE, checkWorkspacePath, workspaceGuardHook } from './workspace-guard'
 
 /** A real workspace under the OS temp dir. On macOS that path itself runs through the /var -> /private/var symlink. */
 function workspace(t: TestContext): string {
@@ -77,4 +77,88 @@ test('the hook denies with the reason, allows silently, and fails closed', async
   const gone = workspaceGuardHook(join(ws, 'does-not-exist'))
   const verdict = await gone({ ...base, tool_name: 'Read', tool_input: { file_path: 'a.md' } }, 'u1', { signal })
   assert.equal((verdict as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision, 'deny')
+})
+
+const configDenied = { ok: false, reason: CONFIG_FILE }
+
+test('file tools cannot create or change what the CLI loads as configuration or instructions', (t) => {
+  const ws = workspace(t)
+  mkdirSync(join(ws, '.claude', 'skills', 'pdf'), { recursive: true })
+  writeFileSync(join(ws, '.claude', 'settings.json'), '{}')
+  for (const tool of ['Write', 'Edit'] as const) {
+    assert.deepEqual(checkWorkspacePath(tool, { file_path: '.claude/settings.json' }, ws), configDenied, `${tool} .claude/settings.json`)
+    assert.deepEqual(checkWorkspacePath(tool, { file_path: join(ws, '.claude', 'settings.json') }, ws), configDenied, `${tool} absolute settings`)
+    assert.deepEqual(checkWorkspacePath(tool, { file_path: '.claude/settings.local.json' }, ws), configDenied, `${tool} settings.local.json`)
+    assert.deepEqual(checkWorkspacePath(tool, { file_path: '.mcp.json' }, ws), configDenied, `${tool} .mcp.json`)
+    assert.deepEqual(checkWorkspacePath(tool, { file_path: 'CLAUDE.md' }, ws), configDenied, `${tool} CLAUDE.md`)
+    assert.deepEqual(checkWorkspacePath(tool, { file_path: 'CLAUDE.local.md' }, ws), configDenied, `${tool} CLAUDE.local.md`)
+  }
+  for (const path of ['.claude/skills/pdf/SKILL.md', '.claude/agents/a.md', '.claude/commands/c.md', '.claude/hooks/h.sh', '.claude']) {
+    assert.deepEqual(checkWorkspacePath('Write', { file_path: path }, ws), configDenied, path)
+  }
+  assert.deepEqual(checkWorkspacePath('NotebookEdit', { notebook_path: '.claude/n.ipynb' }, ws), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'notes/../.claude/settings.json' }, ws), configDenied, 'a detour through .. still lands in .claude')
+  // The CLI also loads CLAUDE.md and .claude/ found below the working directory.
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'notes/CLAUDE.md' }, ws), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'notes/.claude/settings.json' }, ws), configDenied)
+})
+
+test('ordinary files with similar names stay writable', (t) => {
+  const ws = workspace(t)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'claude-notes.md' }, ws), allowed)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'notes/.claude-backup.md' }, ws), allowed)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'notes/mcp.json' }, ws), allowed)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'notes/README.md' }, ws), allowed)
+})
+
+test('on darwin and win32 a case variant of a configuration path is the same path', (t) => {
+  const ws = workspace(t)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: '.Claude/settings.json' }, ws, 'darwin'), configDenied)
+  assert.deepEqual(checkWorkspacePath('Edit', { file_path: '.MCP.json' }, ws, 'darwin'), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'claude.MD' }, ws, 'win32'), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'CLAUDE.md. ' }, ws, 'win32'), configDenied, 'Windows drops trailing dots and spaces')
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'CLAUDE.md::$DATA' }, ws, 'win32'), configDenied, 'an NTFS stream name is the same file')
+  // Elsewhere the file system is case-sensitive and `.Claude` is a different directory the CLI never reads.
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: '.Claude/settings.json' }, ws, 'linux'), allowed)
+})
+
+test('a symlink cannot be used to reach the configuration paths', (t) => {
+  const ws = workspace(t)
+  mkdirSync(join(ws, '.claude'), { recursive: true })
+  symlinkSync(join(ws, '.claude'), join(ws, 'cfg'))
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'cfg/settings.json' }, ws), configDenied)
+  assert.deepEqual(checkWorkspacePath('Edit', { file_path: join(ws, 'cfg', 'settings.json') }, ws), configDenied)
+  // A dangling link: the target does not exist yet, but Write would create it through the link.
+  symlinkSync(join(ws, '.claude', 'settings.json'), join(ws, 'harmless.json'))
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'harmless.json' }, ws), configDenied)
+  symlinkSync(join(ws, '.mcp.json'), join(ws, 'servers.json'))
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'servers.json' }, ws), configDenied)
+})
+
+test('a dangling symlink cannot be used to write outside the workspace', (t) => {
+  const ws = workspace(t)
+  symlinkSync(join(ws, '..', 'planted.txt'), join(ws, 'out.txt'))
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'out.txt' }, ws), denied)
+})
+
+test('reading and searching the configuration stays allowed', (t) => {
+  const ws = workspace(t)
+  mkdirSync(join(ws, '.claude'), { recursive: true })
+  writeFileSync(join(ws, '.claude', 'settings.json'), '{}')
+  assert.deepEqual(checkWorkspacePath('Read', { file_path: '.claude/settings.json' }, ws), allowed)
+  assert.deepEqual(checkWorkspacePath('Read', { file_path: 'CLAUDE.md' }, ws), allowed)
+  assert.deepEqual(checkWorkspacePath('Glob', { pattern: '.claude/**' }, ws), allowed)
+  assert.deepEqual(checkWorkspacePath('Grep', { pattern: 'hooks', path: '.claude' }, ws), allowed)
+})
+
+test('the hook names the configuration rule when it denies', async (t) => {
+  const ws = workspace(t)
+  const hook = workspaceGuardHook(ws)
+  const signal = new AbortController().signal
+  const base = { session_id: 's', transcript_path: '/t', cwd: ws, hook_event_name: 'PreToolUse' as const, tool_use_id: 'u1' }
+  assert.deepEqual(
+    await hook({ ...base, tool_name: 'Write', tool_input: { file_path: '.claude/settings.json', content: '{}' } }, 'u1', { signal }),
+    { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: CONFIG_FILE } },
+  )
+  assert.equal(CONFIG_FILE, "Bots can't change their own configuration files.")
 })

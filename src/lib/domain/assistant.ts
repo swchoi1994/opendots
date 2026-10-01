@@ -36,7 +36,8 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
   {
     id: 'files',
     label: 'Files',
-    description: 'Read, write, and search files inside the bot\'s own workspace. Paths outside it are refused.',
+    description:
+      'Read, write, and search files inside the bot\'s own workspace. Paths outside it are refused, and the bot can\'t change its own configuration files.',
     available: true,
   },
   {
