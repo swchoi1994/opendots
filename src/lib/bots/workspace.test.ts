@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { removeWorkspace, workspaceFor, workspacesRoot } from './workspace'
 
@@ -40,4 +40,20 @@ test('workspaceFor creates a sanitised directory with .claude/skills and is idem
   removeWorkspace('bot_a')
   assert.equal(existsSync(botA), false)
   assert.ok(existsSync(botB))
+})
+
+test('workspaces live under the data dir unless OPENDOTS_WORKSPACES_DIR overrides them', () => {
+  const saved = { data: process.env.OPENDOTS_DATA_DIR, ws: process.env.OPENDOTS_WORKSPACES_DIR }
+  try {
+    delete process.env.OPENDOTS_WORKSPACES_DIR
+    process.env.OPENDOTS_DATA_DIR = '/srv/opendots'
+    assert.equal(workspacesRoot(), join('/srv/opendots', 'workspaces'))
+    process.env.OPENDOTS_WORKSPACES_DIR = 'elsewhere'
+    assert.equal(workspacesRoot(), resolve('elsewhere'))
+  } finally {
+    if (saved.data === undefined) delete process.env.OPENDOTS_DATA_DIR
+    else process.env.OPENDOTS_DATA_DIR = saved.data
+    if (saved.ws === undefined) delete process.env.OPENDOTS_WORKSPACES_DIR
+    else process.env.OPENDOTS_WORKSPACES_DIR = saved.ws
+  }
 })

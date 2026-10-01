@@ -1,5 +1,6 @@
 import { mkdirSync, rmSync } from 'node:fs'
-import { relative, resolve, isAbsolute } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
+import { dataDir } from '../data-dir'
 
 /**
  * A bot's workspace is its "computer": the cwd the Agent SDK runs in, where
@@ -8,10 +9,8 @@ import { relative, resolve, isAbsolute } from 'node:path'
  * hostile url can never escape the root.
  */
 
-const DEFAULT_ROOT = './.opendots/workspaces'
-
 export function workspacesRoot(): string {
-  return resolve(process.env.OPENDOTS_WORKSPACES_DIR || DEFAULT_ROOT)
+  return resolve(process.env.OPENDOTS_WORKSPACES_DIR || join(dataDir(), 'workspaces'))
 }
 
 function safeName(channelUrl: string): string {
