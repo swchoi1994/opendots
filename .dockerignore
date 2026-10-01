@@ -9,4 +9,5 @@ node_modules
 .DS_Store
 .playwright-mcp
 README.md
-INTERN-PROJECT.md
+.opendots
+docs

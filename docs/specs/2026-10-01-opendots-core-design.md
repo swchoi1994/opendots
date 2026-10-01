@@ -67,7 +67,7 @@ export function brainEnv(resolved: ResolvedModel, source: NodeJS.ProcessEnv, dat
 
 - Seeded bots, and new bots that keep the picker's first entry, store the model id `default`. It is resolved each time a turn starts, so adding an API key later moves those bots onto Claude without editing each one. Resolution order: `OPENDOTS_DEFAULT_MODEL` when set (it replaces `CLAUDE_MODEL`); otherwise `sonnet` if `ANTHROPIC_API_KEY` is set; otherwise the first local Ollama model that lists the `tools` capability; otherwise `sonnet`, and `/api/health` reports that no model is usable.
 - The model id table in 3.1 gains a row: `default` resolves as above before anything else happens.
-- New route `GET /api/models` returns `{ id, label, provider, available }[]`: the Claude aliases (`available` only when a key is set) and every local Ollama model with the `tools` capability (read from `GET <OLLAMA_HOST>/api/tags`, 1.5 s timeout; an unreachable Ollama contributes nothing). `ModelSelect` loads this list and keeps its "Other…" free-text entry.
+- New route `GET /api/models` returns `{ models: { id, label, provider, available }[], defaultModel }`: the Claude aliases (`available` only when a key is set) and every local Ollama model with the `tools` capability (read from `GET <OLLAMA_HOST>/api/tags`, 1.5 s timeout; an unreachable Ollama contributes nothing). `ModelSelect` loads this list and keeps its "Other…" free-text entry.
 - Models without tool calling are left out of the list because every bot turn may use tools.
 
 ### 3.4 Cost, labels and health
