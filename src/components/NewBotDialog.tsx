@@ -14,6 +14,7 @@ import {
 } from '@/lib/domain/assistant'
 import { AVATAR_COLORS, AVATAR_SHAPES, avatarFromName, type BotAvatar as BotAvatarModel } from '@/lib/domain/avatar'
 import { useModelOptions } from '@/hooks/useModelOptions'
+import { optionState } from '@/lib/domain/models'
 import type { Skill } from '@/lib/domain/skill'
 
 interface NewBotDialogProps {
@@ -85,7 +86,7 @@ export function ModelSelect({
   onChange: (model: string) => void
   idPrefix?: string
 }) {
-  const options = useModelOptions()
+  const { options, confirmed } = useModelOptions()
   const isCustom = !options.some((entry) => entry.id === value)
   const customInputRef = useRef<HTMLInputElement>(null)
 
@@ -108,11 +109,14 @@ export function ModelSelect({
         }}
         className="rounded-lg border border-line px-3 py-2 text-[14px] outline-none focus:border-ink-900"
       >
-        {options.map((entry) => (
-          <option key={entry.id} value={entry.id} disabled={!entry.available && entry.id !== value}>
-            {entry.available ? entry.label : `${entry.label} (needs ANTHROPIC_API_KEY)`}
-          </option>
-        ))}
+        {options.map((entry) => {
+          const { disabled, label } = optionState(entry, { value, confirmed })
+          return (
+            <option key={entry.id} value={entry.id} disabled={disabled}>
+              {label}
+            </option>
+          )
+        })}
         <option value={CUSTOM_MODEL_VALUE}>Other…</option>
       </select>
       {isCustom && (

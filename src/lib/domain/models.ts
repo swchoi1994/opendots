@@ -62,3 +62,33 @@ export function modelBadge(model: string): string {
   if (trimmed.startsWith(OLLAMA_PREFIX)) return `Ollama · ${trimmed.slice(OLLAMA_PREFIX.length) || '?'}`
   return `${CLAUDE_NAME.test(trimmed) ? 'Claude' : 'API'} · ${trimmed}`
 }
+
+export interface ModelOptionState {
+  disabled: boolean
+  label: string
+}
+
+/**
+ * Whether a picker `<option>` for `entry` can be selected, and what it reads.
+ *
+ * `confirmed` is true once the live `/api/models` list has answered for this
+ * page load (false while loading, and after a failed fetch — the static
+ * fallback marks every Claude entry `available: true` regardless of whether a
+ * key is set, so that can never be trusted on its own). Only Anthropic entries
+ * need the gate: `default` is always available, and an Ollama entry only ever
+ * appears in an already-confirmed list. The entry matching `value` is always
+ * selectable, so a saved model stays chosen whatever its availability.
+ */
+export function optionState(
+  entry: ModelOption,
+  { value, confirmed }: { value: string; confirmed: boolean },
+): ModelOptionState {
+  if (entry.id === value) return { disabled: false, label: entry.label }
+
+  const availabilityKnown = entry.provider !== 'anthropic' || confirmed
+  if (!availabilityKnown) return { disabled: true, label: entry.label }
+
+  return entry.available
+    ? { disabled: false, label: entry.label }
+    : { disabled: true, label: `${entry.label} (needs ANTHROPIC_API_KEY)` }
+}
