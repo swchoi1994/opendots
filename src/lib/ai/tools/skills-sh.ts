@@ -1,22 +1,7 @@
 import { execFile } from 'node:child_process'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-
-/** Kept because a CLI subprocess without them cannot find node, npx, or a home. */
-const ENV_ALLOWLIST = ['PATH', 'HOME', 'USER', 'TMPDIR', 'LANG', 'SHELL'] as const
-
-/**
- * The environment this CLI subprocess is given, built from an allowlist, so
- * the skills.sh CLI never inherits DATABASE_URL and this server's other secrets.
- */
-function scrubbedEnv(source: NodeJS.ProcessEnv): Record<string, string> {
-  const env: Record<string, string> = { NO_COLOR: '1' }
-  for (const key of ENV_ALLOWLIST) {
-    const value = source[key]
-    if (typeof value === 'string' && value.length > 0) env[key] = value
-  }
-  return env
-}
+import { baseEnv } from '../brain-env'
 
 /**
  * skills.sh client.
@@ -64,8 +49,8 @@ const defaultRunner: CommandRunner = (cmd, args, { cwd, timeoutMs }) =>
       cmd,
       args,
       // The cast is Next's doing: its `global.d.ts` makes `NODE_ENV` a required
-      // literal union, which scrubbedEnv's plain Record<string, string> cannot satisfy.
-      { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env: { ...scrubbedEnv(process.env), CI: '1' } as unknown as NodeJS.ProcessEnv },
+      // literal union, which baseEnv's plain Record<string, string> cannot satisfy.
+      { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env: { ...baseEnv(process.env), CI: '1' } as unknown as NodeJS.ProcessEnv },
       (error, stdout, stderr) => {
         const code =
           error && typeof (error as NodeJS.ErrnoException & { code?: unknown }).code === 'number'

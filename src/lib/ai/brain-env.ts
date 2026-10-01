@@ -6,6 +6,23 @@ import { ollamaHost } from './model-catalog'
 const BASE_ALLOWLIST = ['PATH', 'HOME', 'USER', 'TMPDIR', 'LANG', 'SHELL'] as const
 
 /**
+ * The base subprocess environment: an allowlist of the handful of variables a
+ * spawned CLI needs to find node, npx or a home, plus NO_COLOR. This is the
+ * one place that list is spelled out — `brainEnv` below builds on it, and the
+ * other two subprocess callers (agent-browser.ts, tools/skills-sh.ts) import
+ * it directly rather than keeping their own copy, so the allowlist can only
+ * drift by being changed here.
+ */
+export function baseEnv(source: Partial<NodeJS.ProcessEnv>): Record<string, string> {
+  const env: Record<string, string> = { NO_COLOR: '1' }
+  for (const key of BASE_ALLOWLIST) {
+    const value = source[key]
+    if (typeof value === 'string' && value.length > 0) env[key] = value
+  }
+  return env
+}
+
+/**
  * The environment the Agent SDK's CLI subprocess runs with, built from an
  * allowlist. The SDK replaces the subprocess environment outright when `env`
  * is given, so anything not added here (DATABASE_URL, the share-link secret,
@@ -20,11 +37,7 @@ export function brainEnv(
   source: Partial<NodeJS.ProcessEnv>,
   dataDir: string,
 ): Record<string, string> {
-  const env: Record<string, string> = { NO_COLOR: '1', CLAUDE_CONFIG_DIR: join(dataDir, 'claude') }
-  for (const key of BASE_ALLOWLIST) {
-    const value = source[key]
-    if (typeof value === 'string' && value.length > 0) env[key] = value
-  }
+  const env: Record<string, string> = { ...baseEnv(source), CLAUDE_CONFIG_DIR: join(dataDir, 'claude') }
 
   if (resolved.provider === 'anthropic') {
     if (source.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = source.ANTHROPIC_API_KEY

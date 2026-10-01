@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { brainEnv } from './brain-env'
+import { baseEnv, brainEnv } from './brain-env'
 
 const HOST_ENV = {
   PATH: '/usr/bin',
@@ -13,6 +13,23 @@ const HOST_ENV = {
   CLAUDE_CODE_OAUTH_TOKEN: 'subscription-token',
   ANTHROPIC_API_KEY: 'sk-ant-operator',
 }
+
+test('baseEnv keeps the base allowlist and NO_COLOR, and drops everything else', () => {
+  const env = baseEnv({
+    ...HOST_ENV,
+    USER: 'bot',
+    TMPDIR: '/tmp',
+    LANG: 'en_US.UTF-8',
+    SHELL: '/bin/zsh',
+  })
+  for (const key of ['PATH', 'HOME', 'USER', 'TMPDIR', 'LANG', 'SHELL']) {
+    assert.ok(env[key], `${key} must survive baseEnv`)
+  }
+  assert.equal(env.NO_COLOR, '1')
+  for (const secret of ['DATABASE_URL', 'DEPLOYMENT_SESSION_SECRET', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']) {
+    assert.equal(env[secret], undefined, `${secret} must not reach a plain subprocess`)
+  }
+})
 
 test('an Anthropic run gets the API key and nothing it should not', () => {
   const env = brainEnv({ provider: 'anthropic', sdkModel: 'sonnet' }, HOST_ENV, '/data')
