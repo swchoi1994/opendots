@@ -57,6 +57,7 @@ OpenDots doesn't sign in with a Claude.ai subscription. Bots run on the Anthropi
 OpenDots runs agents that act on your computer. These are the boundaries:
 
 - **Local only.** `pnpm dev` and `pnpm start` listen on `127.0.0.1`. There is no sign-in yet, so anyone who can reach the port controls every bot. Don't expose an instance to a network until sign-in ships.
+- **Web pages can't drive your bots.** OpenDots answers only requests addressed to `127.0.0.1`, `localhost` or `[::1]` (or a name you list in `OPENDOTS_ALLOWED_HOSTS`), which stops DNS-rebinding tricks. API calls that change something are refused when they come from another site, so a page you visit can't post a message to a bot and make it act.
 - **Files stay in the workspace.** Every call to Read, Write, Edit, NotebookEdit, Glob and Grep is checked, and a path outside the bot's workspace folder is refused, including one that leaves through a symlink or `~`.
 - **Bots can't change their own configuration.** Write, Edit and NotebookEdit are refused for the workspace's `.claude/` folder (settings, skills, agents, commands, hooks), `.mcp.json`, `CLAUDE.md` and `CLAUDE.local.md`, including through a symlink or, on macOS and Windows, a different letter case. Those files decide what a bot's process runs, so a bot that could write them could give itself a shell. Bots can still read them, and skills still install through the Find and install skills tool.
 - **Terminal means host access.** Shell commands run as your user and aren't confined. The Terminal tool is off by default, and the app warns when a bot has both Terminal and Browser.
@@ -84,6 +85,7 @@ Put values in `.env.local` (see `.env.example`). All are optional.
 | `BOT_MAX_BUDGET_USD` | – | Spend ceiling per reply (Anthropic models) |
 | `BRAIN_DRY_RUN` | – | `1` answers with a canned reply, no model call |
 | `DEPLOYMENT_SESSION_SECRET` | random per process | Signs share-link sessions |
+| `OPENDOTS_ALLOWED_HOSTS` | – | Comma-separated extra host names the server answers to (for example `opendots.lan` or `box.local:8080`); loopback names always work |
 | `RAG_ENABLED` | `true` | `false` turns document search off |
 | `RAG_VECTOR_STORE` | `memory` | `memory` (lexical) today |
 | `RAG_TOP_K` | `4` | Passages retrieved per question |
