@@ -8,7 +8,7 @@ import { getRepository } from '../../repository'
 import type { ChatRepository } from '../../repository/chat-repository'
 import { workspaceFor } from '../../bots/workspace'
 import { DEFAULT_MODEL_ID } from '../../domain/models'
-import { MISSING_API_KEY, runBot, type BotErrorKind } from '../brain'
+import { runBot, withoutCliName, type BotErrorKind } from '../brain'
 import { resolveDefaultModel } from '../model-catalog'
 import { getAiConfig } from '../config'
 import { checkOutput, type GuardrailAction, type GuardrailFinding } from '../guardrails/policies'
@@ -41,6 +41,11 @@ export type TurnTrigger = 'user_message' | 'schedule' | 'event' | 'deployment_vi
  * anyone holding a share link steer an authenticated browser on the host.
  */
 export const VISITOR_RESTRICTED_TOOLS: ToolName[] = ['files', 'shell', 'skills', 'web_browser']
+
+/** What a turn that produced neither text nor an error stores: a blank bubble reads as the bot ignoring you. */
+export const EMPTY_ANSWER = 'The model returned no answer. Try again, or pick a different model.'
+
+const USAGE_LIMIT = 'The model provider reported a rate or usage limit. Try again later.'
 
 export class TurnError extends Error {
   constructor(
@@ -297,12 +302,13 @@ export async function* runBotTurn(
 
     yield { type: 'trace', trace }
 
-    if (failure && !answer) {
-      const detail = failure.kind === 'usage_limit'
-        ? 'The model provider reported a rate or usage limit. Try again later.'
-        : failure.kind === 'auth' && failure.message !== MISSING_API_KEY
-          ? 'The Anthropic API rejected ANTHROPIC_API_KEY. Check the key, then restart OpenDots.'
-          : failure.message
+    // A model can finish "successfully" with nothing to say (a local model that
+    // only thought); that is a failed turn, not an empty reply.
+    if (!failure && !answer.trim()) failure = { message: EMPTY_ANSWER, kind: 'other' }
+
+    if (failure && !answer.trim()) {
+      // The brain already worded the failure for its provider (brain.ts readableFailure).
+      const detail = failure.kind === 'usage_limit' ? USAGE_LIMIT : withoutCliName(failure.message)
       const stored = await repo.appendAssistantMessage(channelUrl, `[assistant error] ${detail}`).catch(() => null)
       yield { type: 'error', error: detail, kind: failure.kind, message: stored }
       return
@@ -314,7 +320,7 @@ export async function* runBotTurn(
     }
 
     const provenance = provenanceFrom(plan.route, retrieved)
-    const text = failure ? `${verdict.text}\n\n[stopped early: ${failure.message}]` : verdict.text
+    const text = failure ? `${verdict.text}\n\n[stopped early: ${withoutCliName(failure.message)}]` : verdict.text
     const stored = await repo.appendAssistantMessage(channelUrl, text, provenance)
     await repo.attachScreensToMessage(channelUrl, turnId, stored.messageId).catch(() => undefined)
     yield { type: 'provenance', provenance }
@@ -329,7 +335,7 @@ export async function* runBotTurn(
      * A consumer that breaks out of this generator (a disconnected client)
      * closes it with a return completion, which skips this catch by design.
      */
-    const detail = cause instanceof Error ? cause.message : 'Bot failed to reply'
+    const detail = cause instanceof Error ? withoutCliName(cause.message) : 'Bot failed to reply'
     const stored = await repo.appendAssistantMessage(channelUrl, `[assistant error] ${detail}`).catch(() => null)
     yield { type: 'error', error: detail, kind: 'other', message: stored }
   }

@@ -6,6 +6,7 @@ import { test, type TestContext } from 'node:test'
 import type { HookCallbackMatcher, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import {
   MISSING_API_KEY,
+  REJECTED_API_KEY,
   classifyError,
   describeBrain,
   explainOllamaFailure,
@@ -47,6 +48,30 @@ function recordingQuery(messages: unknown[]) {
     })()
   }) as unknown as QueryFn
   return { fn, options: () => options, calls: () => calls }
+}
+
+/** Stand-ins for the Ollama reachability probe: unit tests never reach a real Ollama. */
+const ollamaUp = async () => true
+const ollamaDown = async () => false
+
+/**
+ * A fake SDK query() that replays what the real CLI does on a failure: a
+ * `result` with subtype 'success' and is_error true, then the SDK's own throw
+ * once the process exits (both observed against the real CLI, 0.3.286).
+ */
+function failingQuery(resultText: string, before: unknown[] = []) {
+  let calls = 0
+  const fn = (() => {
+    calls += 1
+    return (async function* () {
+      yield { type: 'system', subtype: 'init', session_id: 's-fail' }
+      for (const message of before) yield message
+      yield { type: 'assistant', session_id: 's-fail', parent_tool_use_id: null, message: { content: [{ type: 'text', text: resultText }] } }
+      yield { type: 'result', subtype: 'success', is_error: true, session_id: 's-fail', result: resultText, total_cost_usd: 0, num_turns: 1 }
+      throw new Error(`Claude Code returned an error result: ${resultText}`)
+    })()
+  }) as unknown as QueryFn
+  return { fn, calls: () => calls }
 }
 
 async function collect(events: AsyncGenerator<BotEvent>): Promise<BotEvent[]> {
@@ -165,7 +190,7 @@ test('the default model id must be resolved before runBot is called', async (t) 
 test('an Ollama model runs against Ollama, without the operator key and without a dollar cost', async (t) => {
   const env = testEnv(t, { ANTHROPIC_API_KEY: 'sk-ant-operator', OLLAMA_HOST: 'http://127.0.0.1:11434' })
   const q = recordingQuery([{ type: 'result', subtype: 'success', session_id: 's', result: 'hi', total_cost_usd: 0.42, num_turns: 2 }])
-  const events = await collect(runBot({ ...BASE, model: 'ollama/qwq:latest' }, { query: q.fn, env }))
+  const events = await collect(runBot({ ...BASE, model: 'ollama/qwq:latest' }, { query: q.fn, env, probeOllama: ollamaUp }))
 
   const options = q.options()!
   assert.equal(options.model, 'qwq:latest')
@@ -178,7 +203,7 @@ test('an Ollama model runs against Ollama, without the operator key and without 
 test('Ollama connection and missing-model failures say what to do', async (t) => {
   const env = testEnv(t, { OLLAMA_HOST: 'http://127.0.0.1:11434' })
   const refused = (() => { throw new Error('connect ECONNREFUSED 127.0.0.1:11434') }) as unknown as QueryFn
-  const [down] = await collect(runBot({ ...BASE, model: 'ollama/qwq:latest' }, { query: refused, env }))
+  const [down] = await collect(runBot({ ...BASE, model: 'ollama/qwq:latest' }, { query: refused, env, probeOllama: ollamaUp }))
   assert.equal(down?.type === 'error' && down.message, "Ollama isn't answering at http://127.0.0.1:11434. Start it with `ollama serve`.")
 
   const qwq = { provider: 'ollama' as const, sdkModel: 'qwq:latest' }
@@ -215,4 +240,101 @@ test('runBot aborts the SDK run when the consumer stops reading', async (t) => {
 
   assert.equal((options?.abortController as AbortController).signal.aborted, true, 'closing the generator must abort the CLI subprocess')
   assert.equal(drained, 0, 'the SDK stream must not be advanced after the consumer left')
+})
+
+test('a model Ollama has not pulled ends in one readable error, not a reply (real CLI sequence)', async (t) => {
+  const env = testEnv(t, { OLLAMA_HOST: 'http://127.0.0.1:11434' })
+  const q = failingQuery("There's an issue with the selected model (no-such-model:latest). It may not exist or you may not have access to it.")
+  const events = await collect(runBot({ ...BASE, model: 'ollama/no-such-model:latest' }, { query: q.fn, env, probeOllama: ollamaUp }))
+  assert.deepEqual(events, [
+    { type: 'session', sessionId: 's-fail' },
+    { type: 'error', message: "no-such-model:latest isn't pulled. Run `ollama pull no-such-model:latest`.", kind: 'other' },
+  ])
+})
+
+test('Ollama going away mid-run ends in one readable error (real CLI sequence)', async (t) => {
+  const env = testEnv(t, { OLLAMA_HOST: 'http://127.0.0.1:11434' })
+  const q = failingQuery('API Error: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)')
+  const events = await collect(runBot({ ...BASE, model: 'ollama/qwq:latest' }, { query: q.fn, env, probeOllama: ollamaUp }))
+  assert.deepEqual(events.filter((e) => e.type === 'error'), [
+    { type: 'error', message: "Ollama isn't answering at http://127.0.0.1:11434. Start it with `ollama serve`.", kind: 'other' },
+  ])
+  assert.equal(events.some((e) => e.type === 'result'), false)
+})
+
+test('an Ollama that does not answer the probe fails fast, before the CLI is spawned', async (t) => {
+  const env = testEnv(t, { OLLAMA_HOST: 'http://127.0.0.1:11434' })
+  const q = recordingQuery([])
+  let probed = ''
+  const events = await collect(runBot(
+    { ...BASE, model: 'ollama/qwq:latest' },
+    { query: q.fn, env, probeOllama: async (host) => { probed = host; return ollamaDown() } },
+  ))
+  assert.equal(probed, 'http://127.0.0.1:11434')
+  assert.deepEqual(events, [{ type: 'error', message: "Ollama isn't answering at http://127.0.0.1:11434. Start it with `ollama serve`.", kind: 'other' }])
+  assert.equal(q.calls(), 0)
+})
+
+test('an Anthropic run never probes Ollama', async (t) => {
+  let probed = false
+  const q = recordingQuery([{ type: 'result', subtype: 'success', session_id: 's', result: 'hi', total_cost_usd: 0, num_turns: 1 }])
+  await collect(runBot(BASE, { query: q.fn, env: testEnv(t, { ANTHROPIC_API_KEY: 'k' }), probeOllama: async () => { probed = true; return true } }))
+  assert.equal(probed, false)
+})
+
+test('a key the Anthropic API rejects ends in one error with the rejected-key message', async (t) => {
+  const q = failingQuery('Invalid API key · Fix external API key')
+  const events = await collect(runBot(BASE, { query: q.fn, env: testEnv(t, { ANTHROPIC_API_KEY: 'sk-ant-wrong' }) }))
+  assert.deepEqual(events.filter((e) => e.type === 'error'), [{ type: 'error', message: REJECTED_API_KEY, kind: 'auth' }])
+})
+
+test('other CLI failures keep their text, without the CLI product name', async (t) => {
+  const env = testEnv(t, { ANTHROPIC_API_KEY: 'k' })
+  const q = failingQuery("There's an issue with the selected model (claude-nope). It may not exist or you may not have access to it.")
+  const events = await collect(runBot({ ...BASE, model: 'claude-nope' }, { query: q.fn, env }))
+  const errors = events.filter((e) => e.type === 'error')
+  assert.equal(errors.length, 1)
+  assert.equal(errors[0]?.type === 'error' && errors[0].message, "There's an issue with the selected model (claude-nope). It may not exist or you may not have access to it.")
+
+  const thrown = (() => {
+    throw new Error('Claude Code native binary not found at /app/x/claude. Please ensure Claude Code is installed via native installer or specify a valid path with options.pathToClaudeCodeExecutable.')
+  }) as unknown as QueryFn
+  const [spawnFailure] = await collect(runBot(BASE, { query: thrown, env }))
+  assert.ok(spawnFailure?.type === 'error')
+  assert.doesNotMatch(spawnFailure.message, /claude[ -]?code/i)
+  assert.match(spawnFailure.message, /native binary not found at \/app\/x\/claude/)
+})
+
+test('a run that stops at its turn or budget limit says so in words', async (t) => {
+  const env = testEnv(t, { ANTHROPIC_API_KEY: 'k' })
+  for (const [subtype, expected] of [['error_max_turns', /BOT_MAX_TURNS/], ['error_max_budget_usd', /BOT_MAX_BUDGET_USD/]] as const) {
+    const q = recordingQuery([{ type: 'result', subtype, is_error: true, session_id: 's', errors: [], total_cost_usd: 0, num_turns: 12 }])
+    const events = await collect(runBot(BASE, { query: q.fn, env }))
+    const [error] = events.filter((e) => e.type === 'error')
+    assert.ok(error?.type === 'error')
+    assert.match(error.message, expected)
+  }
+})
+
+test('the Ollama explanations only fire on Ollama connection and missing-model failures', () => {
+  const qwq = { provider: 'ollama' as const, sdkModel: 'qwq:latest' }
+  assert.equal(explainOllamaFailure('MCP server "opendots" failed to connect', qwq, 'http://h'), 'MCP server "opendots" failed to connect')
+  assert.equal(explainOllamaFailure('client disconnected', qwq, 'http://h'), 'client disconnected')
+  assert.equal(
+    explainOllamaFailure('Native CLI binary for linux-arm64 not found. Reinstall the SDK.', qwq, 'http://h'),
+    'Native CLI binary for linux-arm64 not found. Reinstall the SDK.',
+  )
+  assert.equal(explainOllamaFailure('fetch failed', qwq, 'http://h'), "Ollama isn't answering at http://h. Start it with `ollama serve`.")
+  assert.equal(
+    explainOllamaFailure('{"type":"not_found_error","message":"model \'qwq:latest\' not found"}', qwq, 'http://h'),
+    "qwq:latest isn't pulled. Run `ollama pull qwq:latest`.",
+  )
+})
+
+test('mapSdkMessage treats a success result flagged is_error as an error, never as the answer', () => {
+  const events = mapSdkMessage(
+    { type: 'result', subtype: 'success', is_error: true, session_id: 's', result: 'API Error: 500', total_cost_usd: 0, num_turns: 1 } as unknown as SDKMessage,
+    new Map(),
+  )
+  assert.deepEqual(events, [{ type: 'error', message: 'API Error: 500', kind: 'other' }])
 })

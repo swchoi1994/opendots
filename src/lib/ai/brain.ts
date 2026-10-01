@@ -53,6 +53,11 @@ export interface BotRunInput {
 }
 
 export const MISSING_API_KEY = 'Set ANTHROPIC_API_KEY, or switch this bot to an Ollama model.'
+export const REJECTED_API_KEY = 'The Anthropic API rejected ANTHROPIC_API_KEY. Check the key, then restart OpenDots.'
+
+export function ollamaDownMessage(host: string): string {
+  return `Ollama isn't answering at ${host}. Start it with \`ollama serve\`.`
+}
 
 export interface BrainStatus {
   mode: 'live' | 'dry-run'
@@ -68,15 +73,60 @@ export function describeBrain(env: Partial<NodeJS.ProcessEnv> = process.env): Br
   }
 }
 
-/** Ollama failures surface as generic connection or not-found text; say what to do instead. */
+/**
+ * Ollama failures surface as generic connection or not-found text; say what to
+ * do instead. The CLI reports a model Ollama does not have as "There's an
+ * issue with the selected model (…)", and a refused connection, after about
+ * three minutes of retries, as "API Error: Connection refused … (ECONNREFUSED)".
+ */
 export function explainOllamaFailure(message: string, resolved: ResolvedModel, host: string): string {
-  if (/ECONNREFUSED|fetch failed|connection error|socket hang up|connect/i.test(message)) {
-    return `Ollama isn't answering at ${host}. Start it with \`ollama serve\`.`
+  if (/ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOTFOUND|fetch failed|connection error|connection refused|unable to connect|socket hang up/i.test(message)) {
+    return ollamaDownMessage(host)
   }
-  if (/not found|\b404\b/i.test(message)) {
+  if (/issue with the selected model|not_found_error|model\b[^.]{0,80}\bnot found|\b404\b/i.test(message)) {
     return `${resolved.sdkModel} isn't pulled. Run \`ollama pull ${resolved.sdkModel}\`.`
   }
   return message
+}
+
+/**
+ * The SDK wraps a failed run as "Claude Code returned an error result: …" and
+ * names its CLI in other errors too. That is the SDK's product, not ours, and
+ * user-facing copy never uses the name: drop the wrapper, name the rest
+ * generically.
+ */
+export function withoutCliName(text: string): string {
+  return text
+    .replace(/claude[ -]?code returned an error result:\s*/gi, '')
+    .replace(/claude[ -]?code/gi, (_match, offset: number, whole: string) =>
+      offset === 0 || /[.!?]\s*$/.test(whole.slice(0, offset)) ? 'The agent runtime' : 'the agent runtime',
+    )
+}
+
+/** Result subtypes that carry no text of their own. */
+const RESULT_SUBTYPE_TEXT: Record<string, string> = {
+  error_max_turns: 'The bot used all its tool-use rounds for this reply (BOT_MAX_TURNS) before it finished.',
+  error_max_budget_usd: 'The bot reached its spending limit for this reply (BOT_MAX_BUDGET_USD) before it finished.',
+  error_during_execution: 'The bot stopped because of an error while it was working.',
+}
+
+/** The one readable message a failed run ends with, by provider. */
+export function readableFailure(event: { message: string; kind: BotErrorKind }, resolved: ResolvedModel, host: string): string {
+  const text = withoutCliName(event.message)
+  if (resolved.provider === 'anthropic') {
+    return event.kind === 'auth' && event.message !== MISSING_API_KEY ? REJECTED_API_KEY : text
+  }
+  return event.kind === 'other' ? explainOllamaFailure(text, resolved, host) : text
+}
+
+/** Whether Ollama answers at all, so a stopped Ollama fails in a second instead of after minutes of CLI retries. */
+export async function ollamaReachable(host: string, fetchFn: typeof fetch = fetch, timeoutMs = 1500): Promise<boolean> {
+  try {
+    const response = await fetchFn(`${host}/api/version`, { signal: AbortSignal.timeout(timeoutMs) })
+    return response.ok
+  } catch {
+    return false
+  }
 }
 
 export function classifyError(text: string): BotErrorKind {
@@ -153,7 +203,10 @@ export function mapSdkMessage(message: SDKMessage, pendingTools: Map<string, str
     }
 
     case 'result': {
-      if (message.subtype === 'success') {
+      // The real CLI reports most failures (a model it cannot use, a refused
+      // connection, a rejected key) as subtype 'success' with is_error set and
+      // the error text as `result` — never the answer.
+      if (message.subtype === 'success' && !message.is_error) {
         return [{
           type: 'result',
           text: message.result,
@@ -162,8 +215,9 @@ export function mapSdkMessage(message: SDKMessage, pendingTools: Map<string, str
           turns: message.num_turns,
         }]
       }
-      const errors = (message as { errors?: unknown }).errors
-      const text = Array.isArray(errors) && errors.length > 0 ? errors.map(String).join('; ') : message.subtype
+      const errors = message.subtype === 'success' ? [message.result] : (message as { errors?: unknown }).errors
+      const listed = Array.isArray(errors) ? errors.map(String).map((e) => e.trim()).filter(Boolean).join('; ') : ''
+      const text = listed || RESULT_SUBTYPE_TEXT[message.subtype] || message.subtype
       return [{ type: 'error', message: text, kind: classifyError(text) }]
     }
 
@@ -176,7 +230,12 @@ export type QueryFn = typeof sdkQuery
 
 export async function* runBot(
   input: BotRunInput,
-  deps: { query?: QueryFn; env?: Partial<NodeJS.ProcessEnv> } = {},
+  deps: {
+    query?: QueryFn
+    env?: Partial<NodeJS.ProcessEnv>
+    /** Test seam: whether Ollama answers at `host`. Defaults to a 1.5 s probe of /api/version. */
+    probeOllama?: (host: string) => Promise<boolean>
+  } = {},
 ): AsyncGenerator<BotEvent> {
   const query = deps.query ?? sdkQuery
   const source = deps.env ?? process.env
@@ -194,13 +253,15 @@ export async function* runBot(
     return
   }
 
+  const host = ollamaHost(source)
+  // Without this a stopped Ollama costs about three minutes of silent CLI retries.
+  if (resolved.provider === 'ollama' && !(await (deps.probeOllama ?? ollamaReachable)(host))) {
+    yield { type: 'error', message: ollamaDownMessage(host), kind: 'other' }
+    return
+  }
+
   const root = dataDir(source)
   mkdirSync(join(root, 'claude'), { recursive: true })
-  const host = ollamaHost(source)
-  const explain = (event: BotEvent): BotEvent =>
-    event.type === 'error' && event.kind === 'other' && resolved.provider === 'ollama'
-      ? { ...event, message: explainOllamaFailure(event.message, resolved, host) }
-      : event
 
   const abortController = new AbortController()
   input.signal?.addEventListener('abort', () => abortController.abort(), { once: true })
@@ -242,20 +303,34 @@ export async function* runBot(
   }
 
   const pendingTools = new Map<string, string>()
+  /*
+   * A run ends in at most one error. After a failed result the SDK also throws
+   * ("… returned an error result: <the same text>") when the CLI exits; that
+   * throw restates the failure already reported, so it is swallowed.
+   */
+  let failed = false
   try {
     for await (const message of query({ prompt: input.prompt, options })) {
       for (const event of mapSdkMessage(message, pendingTools)) {
-        yield event.type === 'result' && resolved.provider === 'ollama' ? { ...event, costUsd: null } : explain(event)
+        if (event.type === 'error') {
+          if (failed) continue
+          failed = true
+          yield { ...event, message: readableFailure(event, resolved, host) }
+        } else {
+          yield event.type === 'result' && resolved.provider === 'ollama' ? { ...event, costUsd: null } : event
+        }
       }
     }
   } catch (cause) {
-    const text = cause instanceof Error ? cause.message : String(cause)
-    const detail = [text, stderrTail.trim()].filter(Boolean).join('\n')
-    yield explain({
-      type: 'error',
-      message: detail,
-      kind: input.signal?.aborted ? 'aborted' : classifyError(detail),
-    })
+    if (!failed) {
+      const text = cause instanceof Error ? cause.message : String(cause)
+      // The CLI's own diagnostic lines ("[claude-code:unrecognized_model] …", logged on every
+      // local-model run) say nothing to a user.
+      const stderr = stderrTail.split('\n').filter((line) => !/^\[claude[ -]?code:/i.test(line.trim())).join('\n').trim()
+      const detail = [text, stderr].filter(Boolean).join('\n')
+      const kind = input.signal?.aborted ? 'aborted' : classifyError(detail)
+      yield { type: 'error', message: readableFailure({ message: detail, kind }, resolved, host), kind }
+    }
   } finally {
     // Runs on the normal path AND when a consumer closes the generator early
     // (a disconnected client). Without it the CLI subprocess would keep working
