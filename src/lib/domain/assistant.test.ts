@@ -2,12 +2,17 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { DEFAULT_ASSISTANT, TOOL_CATALOG, parseAssistantConfig } from './assistant'
 
-test('parseAssistantConfig fills name and avatar and pins the provider', () => {
-  const parsed = parseAssistantConfig({ provider: 'azure_openai', model: '  ' }, 'Chief of Staff')
-  assert.equal(parsed.provider, 'claude_code')
-  assert.equal(parsed.model, DEFAULT_ASSISTANT.model)
+test('parseAssistantConfig fills name and avatar, defaults the model, and drops a legacy provider field', () => {
+  const parsed = parseAssistantConfig({ provider: 'claude_code', model: '  ' }, 'Chief of Staff')
+  assert.equal('provider' in parsed, false)
+  assert.equal(parsed.model, 'default')
   assert.equal(parsed.name, 'Chief of Staff')
   assert.ok(parsed.avatar.shape && parsed.avatar.color)
+})
+
+test('the Files tool says it is confined to the workspace', () => {
+  const files = TOOL_CATALOG.find((t) => t.id === 'files')
+  assert.match(files?.description ?? '', /inside the bot's own workspace/)
 })
 
 test('parseAssistantConfig drops tools that are not grantable', () => {

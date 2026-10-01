@@ -7,12 +7,12 @@ import {
   DEFAULT_ASSISTANT,
   DEFAULT_GUARDRAILS,
   DEFAULT_MEMORY,
-  MODEL_CATALOG,
   TOOL_CATALOG,
   type AssistantConfig,
   type ToolName,
 } from '@/lib/domain/assistant'
 import { AVATAR_COLORS, AVATAR_SHAPES, avatarFromName, type BotAvatar as BotAvatarModel } from '@/lib/domain/avatar'
+import { STATIC_MODEL_OPTIONS } from '@/lib/domain/models'
 import type { Skill } from '@/lib/domain/skill'
 
 interface NewBotDialogProps {
@@ -84,7 +84,7 @@ export function ModelSelect({
   onChange: (model: string) => void
   idPrefix?: string
 }) {
-  const isCustom = !MODEL_CATALOG.some((entry) => entry.id === value)
+  const isCustom = !STATIC_MODEL_OPTIONS.some((entry) => entry.id === value)
   const customInputRef = useRef<HTMLInputElement>(null)
 
   return (
@@ -106,7 +106,7 @@ export function ModelSelect({
         }}
         className="rounded-lg border border-line px-3 py-2 text-[14px] outline-none focus:border-ink-900"
       >
-        {MODEL_CATALOG.map((entry) => (
+        {STATIC_MODEL_OPTIONS.map((entry) => (
           <option key={entry.id} value={entry.id}>
             {entry.label}
           </option>
@@ -238,7 +238,6 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
     setIsSubmitting(true)
     try {
       await onCreate(name.trim(), {
-        provider: 'claude_code',
         model: resolvedModel,
         name: name.trim(),
         avatar,

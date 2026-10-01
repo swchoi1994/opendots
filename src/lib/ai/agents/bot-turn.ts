@@ -161,7 +161,7 @@ export async function planBotTurn(input: PlanBotTurnInput): Promise<BotTurnPlan>
   trace.push({ node, detail: `planned generation with ${bot.model}` })
 
   const dryRunAnswer = [
-    `[dry run] ${bot.name} would answer with Claude (${bot.provider}), but the brain is in dry-run mode, so no model was called.`,
+    `[dry run] ${bot.name} would answer now, but the brain is in dry-run mode, so no model was called.`,
     '',
     `Model that would be used: ${bot.model}`,
     `Tools granted: ${grants.all.length > 0 ? grants.all.join(', ') : 'none'}`,
