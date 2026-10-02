@@ -85,3 +85,21 @@ test("knowledge search in one workspace never finds another workspace's document
   assert.ok(fromAlpha.some((r) => r.source === `skill/${created.fileName}`))
   assert.ok(!fromBeta.some((r) => r.source === `skill/${created.fileName}`))
 })
+
+test('a document uploaded and deleted between the id check and the index build never stays searchable', async () => {
+  const doc = (id: string, body: string) => ({ id, name: id, description: id, body, fileName: `${id}.md`, uploadedAt: 0 })
+  let ids = ['race_a']
+  let docs = [doc('race_a', 'The nightly ledger closes at nine.'), doc('race_b', 'The quartz turbine hums in hangar seven.')]
+  const repo = fakeRepository({
+    scope: { workspaceId: 'ws_race', actor: { userId: 'user_r', name: 'R' } },
+    listSkillIds: async () => ids,
+    listSkills: async () => docs,
+  })
+  // First call: race_b arrives after the ids were read, so it is indexed.
+  await getRetriever(getAiConfig(), repo)
+  // It is deleted again; the ids now look exactly like the first read did.
+  docs = [doc('race_a', 'The nightly ledger closes at nine.')]
+  ids = ['race_a']
+  const after = await (await getRetriever(getAiConfig(), repo)).retrieve('quartz turbine hangar')
+  assert.ok(!after.some((r) => r.source === 'skill/race_b.md'), 'the deleted document must not be served from a stale index')
+})

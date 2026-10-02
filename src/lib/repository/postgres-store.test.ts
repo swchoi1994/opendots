@@ -46,3 +46,13 @@ test('pglite: after a claim, a restarted process lists an empty local workspace 
   }
   await pg.close()
 })
+
+test('pglite: a stored bot with no tool list reads as having no host-reaching tools', async () => {
+  const { db, repo } = await store()
+  const channel = await repo.createChannel({ name: 'Legacy Tools', assistant: DEFAULT_ASSISTANT })
+  const { tools: _dropped, ...legacy } = DEFAULT_ASSISTANT
+  await db.query('UPDATE channels SET assistant = $2 WHERE channel_url = $1', [channel.channelUrl, JSON.stringify(legacy)])
+  const tools = (await repo.getChannel(channel.channelUrl))!.assistant!.tools
+  assert.deepEqual(tools.filter((tool) => ['files', 'shell', 'skills', 'web_browser'].includes(tool)), [])
+  assert.ok(tools.includes('rag_search'), 'the harmless defaults remain')
+})
