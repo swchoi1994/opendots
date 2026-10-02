@@ -1,6 +1,6 @@
 /**
- * Who may talk to this server. There is no sign-in yet, so the boundary is the
- * machine: the server listens on 127.0.0.1, and this check (run by
+ * Who may talk to this server. Without sign-in the boundary is the machine:
+ * the server listens on 127.0.0.1, and this check (run by
  * src/proxy.ts on every request) closes the two ways a web page the operator
  * visits could still reach it.
  *
