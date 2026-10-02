@@ -14,10 +14,29 @@ export interface CreateSkillInput {
   content: string
 }
 
+/**
+ * Whose data a repository instance works on, and who is acting.
+ *
+ * Every repository instance is bound to one scope: listings and lookups see
+ * only `workspaceId`'s channels and documents (another workspace's channel is
+ * reported exactly like a missing one), and messages and read receipts belong
+ * to `actor`. `getRepository(scope)` builds one per request.
+ */
+export interface Scope {
+  /** A Clerk organization id, a user's own id for their personal workspace, or `local`. */
+  workspaceId: string
+  actor: { userId: string; name: string }
+}
+
+/** Local mode, the tests and the eval: one workspace, one person. Mirrors auth/viewer.ts's LOCAL_VIEWER. */
+export const LOCAL_SCOPE: Scope = { workspaceId: 'local', actor: { userId: 'user_me', name: 'You' } }
+
 export interface Deployment {
   /** Opaque 16-hex-character id that appears in the shareable /app/<id> URL. */
   id: string
   channelUrl: string
+  /** The channel's workspace: a share link acts in it, as a visitor. */
+  workspaceId: string
   createdAt: number
   /**
    * Gate for the share link. A URL alone is a bearer token that leaks through
@@ -98,6 +117,13 @@ export interface ChatRepository {
   listSkillIds(): Promise<string[]>
   createSkill(input: CreateSkillInput): Promise<Skill>
   deleteSkill(skillId: string): Promise<void>
+
+  /**
+   * Instance-wide, whatever this instance's scope: moves every channel and
+   * document still in the `local` workspace into `userId`'s personal workspace,
+   * the first time anyone calls it, and never again.
+   */
+  claimLocalData(userId: string): Promise<'claimed' | 'already'>
 }
 
 /** Thrown for conditions the HTTP layer maps onto specific status codes. */

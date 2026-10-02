@@ -1,4 +1,5 @@
+import { LOCAL_SCOPE } from './chat-repository'
 import { repositoryContract } from './contract'
-import { memoryRepository } from './memory-store'
+import { createMemoryRepository } from './memory-store'
 
-repositoryContract('memory', async () => memoryRepository)
+repositoryContract('memory', async (scope) => createMemoryRepository(scope ?? LOCAL_SCOPE))

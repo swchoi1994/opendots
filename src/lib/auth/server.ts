@@ -31,6 +31,7 @@ async function clerkAuth(): Promise<AuthFacts> {
   }
 }
 
+// Process-wide, so tests that swap it reset it in afterEach and must not run concurrently.
 let authSource: AuthSource = clerkAuth
 
 /** Tests replace Clerk with a fake session; null restores it. Production never calls this. */

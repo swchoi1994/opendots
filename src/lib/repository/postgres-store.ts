@@ -3,7 +3,7 @@ import { removeWorkspace } from '../bots/workspace'
 import { parseAssistantConfig, type AssistantConfig } from '../domain/assistant'
 import { ROSTER } from '../domain/roster'
 import { groupScreensByTurn, screenImageUrl, type NewScreen, type Screen } from '../domain/screen'
-import { assistantUser, channelUrlFor, me, rosterAssistant } from '../domain/seed'
+import { assistantUser, rosterAssistant } from '../domain/seed'
 import { assertUsableSkill, parseSkillMarkdown, type Skill } from '../domain/skill'
 import type {
   ChannelSummary,
@@ -22,13 +22,16 @@ import {
   EmptyChannelName,
   EmptyMessage,
   InvalidSkill,
+  LOCAL_SCOPE,
   SkillNotFound,
   type BotSession,
   type ChatRepository,
   type CreateChannelInput,
   type CreateSkillInput,
   type Deployment,
+  type Scope,
 } from './chat-repository'
+import { seedChannelUrl } from './seed-urls'
 
 /**
  * Postgres-backed ChatRepository (exercise 5).
@@ -43,14 +46,20 @@ import {
  *     read. That is a subquery per channel (list) or a small per-message pass
  *     (thread). At this scale it is fine; at 10k+ messages a materialised
  *     counter would be the next move.
+ *   - An instance is bound to one Scope. Every query filters by its workspace,
+ *     so another workspace's channel looks exactly like a missing one, and the
+ *     scope's person is who sends, reads and is counted as unread.
  */
 
-/** Assistant channels have exactly these two members; only they post here. */
+/** A person keeps the name they sent with; the bot is always shown as it is now. */
 function userFor(senderId: string, senderName: string, bot: User | null): User {
-  if (senderId === me.userId) return me
   if (bot && senderId === bot.userId) return bot
   if (senderId === assistantUser.userId) return { ...assistantUser, nickname: bot?.nickname ?? senderName }
   return { userId: senderId, nickname: senderName, colorToken: 'violet' }
+}
+
+function actorUser(scope: Scope): User {
+  return { userId: scope.actor.userId, nickname: scope.actor.name, colorToken: 'violet' }
 }
 
 interface MessageRow {
@@ -92,7 +101,7 @@ interface ChannelRow {
   unread_count: number
 }
 
-function rowToSummary(row: ChannelRow): ChannelSummary {
+function rowToSummary(row: ChannelRow, actor: User): ChannelSummary {
   const assistant = row.assistant ? parseAssistantConfig(row.assistant, row.name) : null
   const bot = assistant ? botUserFor(row.channel_url, assistant) : null
 
@@ -114,7 +123,7 @@ function rowToSummary(row: ChannelRow): ChannelSummary {
   return {
     channelUrl: row.channel_url,
     name: row.name,
-    members: bot ? [me, bot] : [me],
+    members: bot ? [actor, bot] : [actor],
     memberCount: row.member_count,
     isFrozen: row.is_frozen,
     unreadMessageCount: row.unread_count,
@@ -160,8 +169,8 @@ function rowToScreen(row: ScreenRow): Screen {
   }
 }
 
-// Selects each channel with its last message (LATERAL) and the current user's
-// unread count in one round trip.
+// Selects the workspace's channels ($2), each with its last message (LATERAL)
+// and the acting person's ($1) unread count, in one round trip.
 const CHANNEL_SELECT = `
   SELECT c.channel_url, c.name, c.member_count, c.is_frozen, c.assistant, c.created_at,
          m.message_id AS lm_id, m.sender_id AS lm_sender_id, m.sender_name AS lm_sender_name,
@@ -180,53 +189,109 @@ const CHANNEL_SELECT = `
       SELECT * FROM messages mm WHERE mm.channel_url = c.channel_url
        ORDER BY mm.created_at DESC, mm.message_id DESC LIMIT 1
     ) m ON TRUE
+   WHERE c.workspace_id = $2
 `
 
+/** The scoped instance's channel filter, for tables that hang off a channel. */
+const IN_WORKSPACE = 'channel_url IN (SELECT channel_url FROM channels WHERE workspace_id = $2)'
+
+interface DeploymentRow {
+  deployment_id: string
+  channel_url: string
+  workspace_id: string
+  passcode: string
+  allow_posting: boolean
+  created_at: Date
+}
+
+function rowToDeployment(row: DeploymentRow): Deployment {
+  return {
+    id: row.deployment_id,
+    channelUrl: row.channel_url,
+    workspaceId: row.workspace_id,
+    createdAt: new Date(row.created_at).getTime(),
+    passcode: row.passcode,
+    allowPosting: row.allow_posting,
+  }
+}
+
+/**
+ * Workspaces whose seeding this process has already settled, per database.
+ * Module-level rather than per instance: routes build a repository per request.
+ */
+const seededByDb = new WeakMap<Db, Set<string>>()
+
 export class PostgresChatRepository implements ChatRepository {
-  private seeded = false
+  private readonly me: User
 
   /** Tests inject an in-memory PGlite; the app uses the process-wide database (PGlite or a server). */
-  constructor(private readonly injected?: Db) {}
+  constructor(
+    private readonly injected?: Db,
+    private readonly scope: Scope = LOCAL_SCOPE,
+  ) {
+    this.me = actorUser(scope)
+  }
 
   private get db(): Db {
     return this.injected ?? getDb()
   }
 
+  private get workspaceId(): string {
+    return this.scope.workspaceId
+  }
+
+  private seeded(): Set<string> {
+    let seeded = seededByDb.get(this.db)
+    if (!seeded) {
+      seeded = new Set()
+      seededByDb.set(this.db, seeded)
+    }
+    return seeded
+  }
+
+  /** The channel, if it is in this scope's workspace; anything else is reported as missing. */
   private async requireChannel(channelUrl: string): Promise<{ isFrozen: boolean }> {
     const { rows } = await this.db.query<{ is_frozen: boolean }>(
-      'SELECT is_frozen FROM channels WHERE channel_url = $1',
-      [channelUrl],
+      'SELECT is_frozen FROM channels WHERE channel_url = $1 AND workspace_id = $2',
+      [channelUrl, this.workspaceId],
     )
     if (rows.length === 0) throw ChannelNotFound(channelUrl)
     return { isFrozen: rows[0]!.is_frozen }
   }
 
   /**
-   * Seeds the nine-bot roster on first use against an empty database, so a
-   * fresh `docker compose up` (or a wiped table) gets the same starting point
-   * as the in-memory store without a separate seed script.
+   * Seeds the nine-bot roster into an empty workspace on its first listing, so
+   * a fresh `docker compose up`, a new team or a wiped workspace gets the same
+   * starting point as the in-memory store without a separate seed script.
    */
   private async seedIfEmpty(): Promise<void> {
-    if (this.seeded || process.env.SEED_BOTS === '0') return
+    const seeded = this.seeded()
+    if (seeded.has(this.workspaceId) || process.env.SEED_BOTS === '0') return
 
     await this.db.transaction(async (tx) => {
-      // Advisory lock scoped to this transaction: a second concurrent seeder
-      // (another request, or another instance on the same server) blocks here
-      // until this one commits, so "check empty, then insert" cannot interleave.
-      await tx.query("SELECT pg_advisory_xact_lock(hashtext('opendots_seed'))")
+      // Advisory lock scoped to this transaction and this workspace: a second
+      // concurrent seeder (another request, or another instance on the same
+      // server) blocks here until this one commits, so "check empty, then
+      // insert" cannot interleave.
+      await tx.query("SELECT pg_advisory_xact_lock(hashtext('opendots_seed:' || $1::text))", [this.workspaceId])
 
-      const { rows } = await tx.query<{ n: string }>('SELECT COUNT(*)::text AS n FROM channels')
+      const { rows } = await tx.query<{ n: string }>(
+        'SELECT COUNT(*)::text AS n FROM channels WHERE workspace_id = $1',
+        [this.workspaceId],
+      )
       if (Number(rows[0]?.n ?? '0') > 0) return
 
       for (const entry of ROSTER) {
-        const channelUrl = channelUrlFor(entry.slug)
+        const channelUrl = seedChannelUrl(entry.slug, this.workspaceId)
         const assistant = rosterAssistant(entry)
         const bot = botUserFor(channelUrl, assistant)
-        await tx.query(
-          `INSERT INTO channels (channel_url, name, member_count, is_frozen, assistant)
-           VALUES ($1, $2, 2, FALSE, $3) ON CONFLICT (channel_url) DO NOTHING`,
-          [channelUrl, entry.name, JSON.stringify(assistant)],
+        const inserted = await tx.query(
+          `INSERT INTO channels (channel_url, name, member_count, is_frozen, assistant, workspace_id)
+           VALUES ($1, $2, 2, FALSE, $3, $4) ON CONFLICT (channel_url) DO NOTHING RETURNING channel_url`,
+          [channelUrl, entry.name, JSON.stringify(assistant), this.workspaceId],
         )
+        // Someone else holds the url: after a claim, the claimed bots keep `local`'s urls.
+        if (inserted.rows.length === 0) continue
         await tx.query(
           `INSERT INTO messages (channel_url, sender_id, sender_name, body, message_type)
            VALUES ($1, $2, $3, $4, 'user')`,
@@ -235,38 +300,36 @@ export class PostgresChatRepository implements ChatRepository {
         await tx.query(
           `INSERT INTO read_receipts (channel_url, user_id, read_at) VALUES ($1, $2, NOW()), ($1, $3, NOW())
            ON CONFLICT (channel_url, user_id) DO UPDATE SET read_at = EXCLUDED.read_at`,
-          [channelUrl, me.userId, bot.userId],
+          [channelUrl, this.me.userId, bot.userId],
         )
       }
     })
-    this.seeded = true
+    seeded.add(this.workspaceId)
   }
 
   async listChannels(): Promise<ChannelSummary[]> {
     await this.seedIfEmpty()
     const { rows } = await this.db.query<ChannelRow>(
       `${CHANNEL_SELECT} ORDER BY COALESCE(m.created_at, c.created_at) DESC`,
-      [me.userId],
+      [this.me.userId, this.workspaceId],
     )
-    return rows.map(rowToSummary)
+    return rows.map((row) => rowToSummary(row, this.me))
   }
 
   async getChannel(channelUrl: string): Promise<ChannelSummary | null> {
     const { rows } = await this.db.query<ChannelRow>(
-      `${CHANNEL_SELECT} WHERE c.channel_url = $2`,
-      [me.userId, channelUrl],
+      `${CHANNEL_SELECT} AND c.channel_url = $3`,
+      [this.me.userId, this.workspaceId, channelUrl],
     )
-    return rows[0] ? rowToSummary(rows[0]) : null
+    return rows[0] ? rowToSummary(rows[0], this.me) : null
   }
 
   async listMessages(channelUrl: string): Promise<MessageWithReceipt[] | null> {
     // Null (no channel) vs [] (channel, no messages) — the routes map that to 404 vs 200.
-    const exists = await this.db.query('SELECT 1 FROM channels WHERE channel_url = $1', [channelUrl])
-    if (exists.rows.length === 0) return null
-
     const channel = await this.getChannel(channelUrl)
-    const bot = channel?.assistant ? botUserFor(channelUrl, channel.assistant) : null
-    const members = bot ? [me, bot] : [me]
+    if (!channel) return null
+    const bot = channel.assistant ? botUserFor(channelUrl, channel.assistant) : null
+    const members = channel.members
 
     const [{ rows: messages }, { rows: receipts }] = await Promise.all([
       this.db.query<MessageRow>(
@@ -302,11 +365,11 @@ export class PostgresChatRepository implements ChatRepository {
       `INSERT INTO messages (channel_url, sender_id, sender_name, body, message_type)
        VALUES ($1, $2, $3, $4, 'user')
        RETURNING message_id, channel_url, sender_id, sender_name, body, provenance, created_at`,
-      [channelUrl, me.userId, me.nickname, trimmed],
+      [channelUrl, this.me.userId, this.me.nickname, trimmed],
     )
     const message = rowToMessage(rows[0]!, null)
     // Sending is an implicit read of everything up to it.
-    await this.setReadReceipt(channelUrl, me.userId)
+    await this.setReadReceipt(channelUrl, this.me.userId)
     return message
   }
 
@@ -317,7 +380,7 @@ export class PostgresChatRepository implements ChatRepository {
   ): Promise<Message> {
     const channel = await this.getChannel(channelUrl)
     if (!channel) throw ChannelNotFound(channelUrl)
-    const bot = channel.assistant ? botUserFor(channelUrl, channel.assistant) : me
+    const bot = channel.assistant ? botUserFor(channelUrl, channel.assistant) : this.me
     const { rows } = await this.db.query<MessageRow>(
       `INSERT INTO messages (channel_url, sender_id, sender_name, body, message_type, provenance)
        VALUES ($1, $2, $3, $4, 'user', $5)
@@ -325,11 +388,11 @@ export class PostgresChatRepository implements ChatRepository {
       [channelUrl, bot.userId, bot.nickname, text, provenance ? JSON.stringify(provenance) : null],
     )
     const message = rowToMessage(rows[0]!, bot)
-    // The user is looking at the conversation they just posted into, so the
-    // reply should not arrive already marked unread; and the bot has
-    // "read" up to its own reply, so the user's messages show the double check.
+    // The person who asked is looking at the conversation, so the reply should
+    // not arrive already marked unread for them; and the bot has "read" up to
+    // its own reply, so their messages show the double check.
     await Promise.all([
-      this.setReadReceipt(channelUrl, me.userId),
+      this.setReadReceipt(channelUrl, this.me.userId),
       this.setReadReceipt(channelUrl, bot.userId),
     ])
     return message
@@ -350,7 +413,7 @@ export class PostgresChatRepository implements ChatRepository {
 
   async markRead(channelUrl: string): Promise<ChannelSummary> {
     await this.requireChannel(channelUrl)
-    await this.setReadReceipt(channelUrl, me.userId)
+    await this.setReadReceipt(channelUrl, this.me.userId)
     return (await this.getChannel(channelUrl))!
   }
 
@@ -360,11 +423,11 @@ export class PostgresChatRepository implements ChatRepository {
 
     const channelUrl = `channel_assistant_${randomBytes(6).toString('hex')}`
     await this.db.query(
-      `INSERT INTO channels (channel_url, name, member_count, is_frozen, assistant)
-       VALUES ($1, $2, 2, FALSE, $3)`,
-      [channelUrl, name, JSON.stringify(input.assistant)],
+      `INSERT INTO channels (channel_url, name, member_count, is_frozen, assistant, workspace_id)
+       VALUES ($1, $2, 2, FALSE, $3, $4)`,
+      [channelUrl, name, JSON.stringify(input.assistant), this.workspaceId],
     )
-    await this.setReadReceipt(channelUrl, me.userId)
+    await this.setReadReceipt(channelUrl, this.me.userId)
     return (await this.getChannel(channelUrl))!
   }
 
@@ -372,8 +435,8 @@ export class PostgresChatRepository implements ChatRepository {
     // The name travels with the config: the channel name is what the sidebar
     // renders, so updating only the JSON made a rename half-apply.
     const { rowCount } = await this.db.query(
-      'UPDATE channels SET assistant = $2, name = $3 WHERE channel_url = $1',
-      [channelUrl, JSON.stringify(assistant), assistant.name],
+      'UPDATE channels SET assistant = $3, name = $4 WHERE channel_url = $1 AND workspace_id = $2',
+      [channelUrl, this.workspaceId, JSON.stringify(assistant), assistant.name],
     )
     if (!rowCount) throw ChannelNotFound(channelUrl)
     return (await this.getChannel(channelUrl))!
@@ -381,23 +444,28 @@ export class PostgresChatRepository implements ChatRepository {
 
   async deleteChannel(channelUrl: string): Promise<void> {
     // ON DELETE CASCADE removes the channel's messages, receipts, deployment and bot session.
-    const { rowCount } = await this.db.query('DELETE FROM channels WHERE channel_url = $1', [channelUrl])
+    const { rowCount } = await this.db.query(
+      'DELETE FROM channels WHERE channel_url = $1 AND workspace_id = $2',
+      [channelUrl, this.workspaceId],
+    )
     if (!rowCount) throw ChannelNotFound(channelUrl)
     removeWorkspace(channelUrl)
-    // Deleting can empty the table, and `seeded` is what stops the lazy roster
-    // seed from ever looking again. Leave it latched and a wiped database stays
-    // empty for the life of the process.
-    this.seeded = false
+    // Deleting can empty the workspace, and `seeded` is what stops the lazy
+    // roster seed from ever looking again. Leave it latched and a wiped
+    // workspace stays empty for the life of the process.
+    this.seeded().delete(this.workspaceId)
   }
 
   async deleteAllChannels(): Promise<number> {
-    const { rows } = await this.db.query<{ channel_url: string }>('SELECT channel_url FROM channels')
+    const { rows } = await this.db.query<{ channel_url: string }>(
+      'DELETE FROM channels WHERE workspace_id = $1 RETURNING channel_url',
+      [this.workspaceId],
+    )
     for (const r of rows) removeWorkspace(r.channel_url)
-    const { rowCount } = await this.db.query('DELETE FROM channels')
-    // The table is now empty by construction: the next request must be allowed
-    // to re-seed the roster.
-    this.seeded = false
-    return rowCount ?? 0
+    // The workspace is now empty by construction: the next request must be
+    // allowed to re-seed the roster.
+    this.seeded().delete(this.workspaceId)
+    return rows.length
   }
 
   async deployChannel(channelUrl: string): Promise<Deployment> {
@@ -409,55 +477,31 @@ export class PostgresChatRepository implements ChatRepository {
 
     // Deploying twice must return the SAME id — the no-op UPDATE returns the
     // existing row rather than minting a new one (unique index on channel_url).
-    const { rows } = await this.db.query<{
-      deployment_id: string
-      channel_url: string
-      passcode: string
-      allow_posting: boolean
-      created_at: Date
-    }>(
+    const { rows } = await this.db.query<Omit<DeploymentRow, 'workspace_id'>>(
       `INSERT INTO deployments (deployment_id, channel_url, passcode, allow_posting)
        VALUES ($1, $2, $3, TRUE)
        ON CONFLICT (channel_url) DO UPDATE SET channel_url = EXCLUDED.channel_url
        RETURNING deployment_id, channel_url, passcode, allow_posting, created_at`,
       [id, channelUrl, passcode],
     )
-    const row = rows[0]!
-    return {
-      id: row.deployment_id,
-      channelUrl: row.channel_url,
-      createdAt: new Date(row.created_at).getTime(),
-      passcode: row.passcode,
-      allowPosting: row.allow_posting,
-    }
+    return rowToDeployment({ ...rows[0]!, workspace_id: this.workspaceId })
   }
 
+  /** Deliberately unscoped: a share link is opened by someone outside the workspace. */
   async getDeployment(deploymentId: string): Promise<Deployment | null> {
-    const { rows } = await this.db.query<{
-      deployment_id: string
-      channel_url: string
-      passcode: string
-      allow_posting: boolean
-      created_at: Date
-    }>(
-      'SELECT deployment_id, channel_url, passcode, allow_posting, created_at FROM deployments WHERE deployment_id = $1',
+    const { rows } = await this.db.query<DeploymentRow>(
+      `SELECT d.deployment_id, d.channel_url, c.workspace_id, d.passcode, d.allow_posting, d.created_at
+         FROM deployments d JOIN channels c ON c.channel_url = d.channel_url
+        WHERE d.deployment_id = $1`,
       [deploymentId],
     )
-    const row = rows[0]
-    if (!row) return null
-    return {
-      id: row.deployment_id,
-      channelUrl: row.channel_url,
-      createdAt: new Date(row.created_at).getTime(),
-      passcode: row.passcode,
-      allowPosting: row.allow_posting,
-    }
+    return rows[0] ? rowToDeployment(rows[0]) : null
   }
 
   async getBotSession(channelUrl: string): Promise<BotSession | null> {
     const { rows } = await this.db.query<{ session_id: string; provider: string | null }>(
-      'SELECT session_id, provider FROM bot_sessions WHERE channel_url = $1',
-      [channelUrl],
+      `SELECT session_id, provider FROM bot_sessions WHERE channel_url = $1 AND ${IN_WORKSPACE}`,
+      [channelUrl, this.workspaceId],
     )
     const row = rows[0]
     if (!row) return null
@@ -476,10 +520,14 @@ export class PostgresChatRepository implements ChatRepository {
   }
 
   async clearBotSession(channelUrl: string): Promise<void> {
-    await this.db.query('DELETE FROM bot_sessions WHERE channel_url = $1', [channelUrl])
+    await this.db.query(`DELETE FROM bot_sessions WHERE channel_url = $1 AND ${IN_WORKSPACE}`, [
+      channelUrl,
+      this.workspaceId,
+    ])
   }
 
   async appendScreen(input: NewScreen): Promise<Screen> {
+    await this.requireChannel(input.channelUrl)
     const { rows } = await this.db.query<ScreenRow>(
       `INSERT INTO screens (channel_url, turn_id, step, action, target, intent, url, title, image_path, annotations, flagged)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -528,8 +576,8 @@ export class PostgresChatRepository implements ChatRepository {
     opts: { turnId?: string; limit?: number } = {},
   ): Promise<Screen[]> {
     const limit = opts.limit ?? 200
-    const params: unknown[] = [channelUrl]
-    let query = 'SELECT * FROM screens WHERE channel_url = $1'
+    const params: unknown[] = [channelUrl, this.workspaceId]
+    let query = `SELECT * FROM screens WHERE channel_url = $1 AND ${IN_WORKSPACE}`
     if (opts.turnId) {
       params.push(opts.turnId)
       query += ` AND turn_id = $${params.length}`
@@ -547,18 +595,18 @@ export class PostgresChatRepository implements ChatRepository {
     opts: { attachedOnly?: boolean } = {},
   ): Promise<string | null> {
     const { rows } = await this.db.query<{ image_path: string | null }>(
-      `SELECT image_path FROM screens WHERE channel_url = $1 AND screen_id = $2${
+      `SELECT image_path FROM screens WHERE channel_url = $1 AND ${IN_WORKSPACE} AND screen_id = $3${
         opts.attachedOnly ? ' AND message_id IS NOT NULL' : ''
       }`,
-      [channelUrl, screenId],
+      [channelUrl, this.workspaceId, screenId],
     )
     return rows[0]?.image_path ?? null
   }
 
   async attachScreensToMessage(channelUrl: string, turnId: string, messageId: number): Promise<void> {
     await this.db.query(
-      'UPDATE screens SET message_id = $3 WHERE channel_url = $1 AND turn_id = $2',
-      [channelUrl, turnId, messageId],
+      `UPDATE screens SET message_id = $4 WHERE channel_url = $1 AND ${IN_WORKSPACE} AND turn_id = $3`,
+      [channelUrl, this.workspaceId, turnId, messageId],
     )
   }
 
@@ -570,7 +618,10 @@ export class PostgresChatRepository implements ChatRepository {
       body: string
       file_name: string
       created_at: Date
-    }>('SELECT skill_id, name, description, body, file_name, created_at FROM skills ORDER BY created_at DESC')
+    }>(
+      'SELECT skill_id, name, description, body, file_name, created_at FROM skills WHERE workspace_id = $1 ORDER BY created_at DESC',
+      [this.workspaceId],
+    )
     return rows.map((row) => ({
       id: row.skill_id,
       name: row.name,
@@ -583,7 +634,8 @@ export class PostgresChatRepository implements ChatRepository {
 
   async listSkillIds(): Promise<string[]> {
     const { rows } = await this.db.query<{ skill_id: string }>(
-      'SELECT skill_id FROM skills ORDER BY skill_id',
+      'SELECT skill_id FROM skills WHERE workspace_id = $1 ORDER BY skill_id',
+      [this.workspaceId],
     )
     return rows.map((row) => row.skill_id)
   }
@@ -606,9 +658,9 @@ export class PostgresChatRepository implements ChatRepository {
     }
 
     await this.db.query(
-      `INSERT INTO skills (skill_id, name, description, body, file_name)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [skill.id, skill.name, skill.description, skill.body, skill.fileName],
+      `INSERT INTO skills (skill_id, name, description, body, file_name, workspace_id)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [skill.id, skill.name, skill.description, skill.body, skill.fileName, this.workspaceId],
     )
 
     return skill
@@ -616,7 +668,25 @@ export class PostgresChatRepository implements ChatRepository {
 
   async deleteSkill(skillId: string): Promise<void> {
     // ON DELETE CASCADE drops the skill's chunks with it.
-    const { rowCount } = await this.db.query('DELETE FROM skills WHERE skill_id = $1', [skillId])
+    const { rowCount } = await this.db.query('DELETE FROM skills WHERE skill_id = $1 AND workspace_id = $2', [
+      skillId,
+      this.workspaceId,
+    ])
     if (!rowCount) throw SkillNotFound(skillId)
+  }
+
+  async claimLocalData(userId: string): Promise<'claimed' | 'already'> {
+    return this.db.transaction(async (tx) => {
+      // Two first sign-ins at once: the second waits here, then finds the row.
+      await tx.query("SELECT pg_advisory_xact_lock(hashtext('opendots_claim'))")
+      const { rows } = await tx.query(
+        "INSERT INTO instance_claims (name, value) VALUES ('local_data', $1) ON CONFLICT (name) DO NOTHING RETURNING name",
+        [userId],
+      )
+      if (rows.length === 0) return 'already'
+      await tx.query("UPDATE channels SET workspace_id = $1 WHERE workspace_id = 'local'", [userId])
+      await tx.query("UPDATE skills SET workspace_id = $1 WHERE workspace_id = 'local'", [userId])
+      return 'claimed'
+    })
   }
 }

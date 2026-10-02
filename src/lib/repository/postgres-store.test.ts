@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { openPglite, pgliteDb, type Db } from '../db'
+import { DEFAULT_ASSISTANT } from '../domain/assistant'
 import { migrate } from '../migrate'
 import { repositoryContract } from './contract'
 import { PostgresChatRepository } from './postgres-store'
@@ -17,11 +18,31 @@ async function store(): Promise<{ db: Db; repo: PostgresChatRepository }> {
   return shared
 }
 
-repositoryContract('pglite', async () => (await store()).repo)
+repositoryContract('pglite', async (scope) => new PostgresChatRepository((await store()).db, scope))
 
 test('pglite: a session row written before 004 (no provider) reads back with provider null', async () => {
   const { db, repo } = await store()
-  const channel = await repo.createChannel({ name: 'Legacy Session', assistant: (await repo.listChannels())[0]!.assistant! })
+  // Its own bot: the contract's last test leaves the local workspace claimed and empty.
+  const channel = await repo.createChannel({ name: 'Legacy Session', assistant: DEFAULT_ASSISTANT })
   await db.query('INSERT INTO bot_sessions (channel_url, session_id) VALUES ($1, $2)', [channel.channelUrl, 'old-sess'])
   assert.deepEqual(await repo.getBotSession(channel.channelUrl), { sessionId: 'old-sess', provider: null })
+})
+
+test('pglite: after a claim, a restarted process lists an empty local workspace instead of colliding with the claimed urls', async () => {
+  const pg = await openPglite()
+  const first = pgliteDb(pg)
+  await migrate(first)
+  const seeded = await new PostgresChatRepository(first).listChannels()
+  assert.equal(await new PostgresChatRepository(first).claimLocalData('user_claimant'), 'claimed')
+
+  // A new Db handle over the same data has no seeding memory: a restarted process.
+  const restarted = pgliteDb(pg)
+  assert.deepEqual(await new PostgresChatRepository(restarted).listChannels(), [])
+  const claimant = new PostgresChatRepository(restarted, { workspaceId: 'user_claimant', actor: { userId: 'user_claimant', name: 'Claimant' } })
+  const theirs = await claimant.listChannels()
+  assert.deepEqual(theirs.map((c) => c.channelUrl).sort(), seeded.map((c) => c.channelUrl).sort())
+  for (const { channelUrl } of theirs) {
+    assert.equal((await claimant.listMessages(channelUrl))!.length, 1, `${channelUrl} keeps exactly its own intro`)
+  }
+  await pg.close()
 })
