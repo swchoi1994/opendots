@@ -44,7 +44,8 @@ RUN addgroup --system --gid 1001 nodejs \
 
 COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
-COPY --from=build --chown=nextjs:nodejs /app/public ./public
+# No public/ directory: the only static asset (src/app/icon.svg) is built into
+# .next. Add `COPY --from=build … /app/public ./public` back if one appears.
 
 # Migrations run from the app on first use; they are read from ./db at runtime.
 COPY --from=build --chown=nextjs:nodejs /app/db ./db
