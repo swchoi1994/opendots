@@ -54,7 +54,13 @@ export function startArgs(env, argv = []) {
       error: 'pnpm start takes only --port and --keepAliveTimeout. Set the address with OPENDOTS_LISTEN_HOST: it is checked before OpenDots starts.',
     }
   }
-  const host = (env.OPENDOTS_LISTEN_HOST ?? '').trim() || '127.0.0.1'
+  // .env files are loaded into the environment Next inherits, so NODE_OPTIONS there counts too.
+  if (/--inspect/.test(env.NODE_OPTIONS ?? '')) {
+    return { error: 'pnpm start will not run with --inspect in NODE_OPTIONS: the debugger runs any code it is sent. Use pnpm dev to debug.' }
+  }
+  const raw = (env.OPENDOTS_LISTEN_HOST ?? '').trim() || '127.0.0.1'
+  // The Host header writes IPv6 loopback as [::1]; the address to listen on is ::1.
+  const host = raw === '[::1]' ? '::1' : raw
   if (!isLoopback(host) && !signInIsOn(env)) {
     return {
       error:

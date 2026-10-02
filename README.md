@@ -113,7 +113,7 @@ Google sign-in was already on in the new application. A development instance sig
 | Show a bot's browser window | ✓ | – | – |
 | Delete a bot, every bot, or a document | ✓ | ✓ | – |
 
-Starter bots come with Files, Skills and Browser only in local mode and in an operator's personal workspace. Everywhere else they start without them, and an operator who is an admin there turns on what's needed.
+Starter bots come with Files, Skills and Browser only in local mode and in an operator's personal workspace. Everywhere else they start without them, and an operator who is an admin there turns on what's needed. Removing someone from `OPENDOTS_OPERATORS` stops them granting more, but the bots they already gave these tools keep them until an operator turns them off.
 
 ### What happens to data from before sign-in
 

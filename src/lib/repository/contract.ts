@@ -232,12 +232,19 @@ export function repositoryContract(label: string, getRepo: (scope?: Scope) => Pr
     const skill = await local.createSkill({ fileName: 'before-sign-in.md', content: 'A document made before anyone signed in.' })
     const aliceHome: Scope = { workspaceId: 'user_alice', actor: { userId: 'user_alice', name: 'Alice' } }
     const alice = await getRepo(aliceHome)
+    // Signed in before being listed as an operator: a starter set exists, and one of them was used.
+    const touched = (await alice.listChannels())[0]!.channelUrl
+    await alice.sendMessage(touched, 'kept, because it was used')
     await local.sendMessage(localUrl, 'written before sign-in')
     const localUrls = (await local.listChannels()).map((c) => c.channelUrl).sort()
     const localSkills = (await local.listSkillIds()).sort()
     assert.equal(await alice.claimLocalData({ userId: 'user_alice', name: 'Alice' }), 'claimed')
     const claimed = await alice.listChannels()
-    assert.deepEqual(claimed.map((c) => c.channelUrl).sort(), localUrls, 'every local bot moved, and no starter set was added')
+    assert.deepEqual(
+      claimed.map((c) => c.channelUrl).sort(),
+      [...localUrls, touched].sort(),
+      'every local bot moved; untouched starter bots gave way, the used one stayed',
+    )
     assert.ok(localUrls.includes(localUrl))
     assert.deepEqual((await alice.listSkillIds()).sort(), localSkills, 'every local document moved')
     assert.ok(localSkills.includes(skill.id))

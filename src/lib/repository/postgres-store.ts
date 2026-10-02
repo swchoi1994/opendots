@@ -695,7 +695,8 @@ export class PostgresChatRepository implements ChatRepository {
   }
 
   async claimLocalData({ userId, name }: { userId: string; name: string }): Promise<'claimed' | 'already'> {
-    return this.db.transaction(async (tx) => {
+    const replaced: string[] = []
+    const outcome = await this.db.transaction(async (tx) => {
       // Two first sign-ins at once: the second waits here, then finds the row.
       await tx.query("SELECT pg_advisory_xact_lock(hashtext('opendots_claim'))")
       const { rows } = await tx.query(
@@ -703,6 +704,19 @@ export class PostgresChatRepository implements ChatRepository {
         [userId],
       )
       if (rows.length === 0) return 'already'
+      // Signed in before being listed as an operator, their workspace got a
+      // starter set. Untouched ones (only the bot has written) give way to the
+      // claimed bots, or every name would appear twice; any they used stays.
+      const local = await tx.query('SELECT 1 FROM channels WHERE workspace_id = $1 LIMIT 1', [LOCAL_SCOPE.workspaceId])
+      if (local.rows.length > 0) {
+        const { rows: dropped } = await tx.query<{ channel_url: string }>(
+          `DELETE FROM channels c WHERE c.workspace_id = $1 AND c.channel_url = ANY($2::text[])
+             AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.channel_url = c.channel_url AND m.sender_id <> 'bot_' || c.channel_url)
+           RETURNING c.channel_url`,
+          [userId, ROSTER.map((entry) => seedChannelUrl(entry.slug, userId))],
+        )
+        replaced.push(...dropped.map((row) => row.channel_url))
+      }
       // They were the local person: what that person had read, they have read.
       await tx.query(
         `INSERT INTO read_receipts (channel_url, user_id, read_at)
@@ -720,7 +734,9 @@ export class PostgresChatRepository implements ChatRepository {
       )
       await tx.query('UPDATE channels SET workspace_id = $1 WHERE workspace_id = $2', [userId, LOCAL_SCOPE.workspaceId])
       await tx.query('UPDATE skills SET workspace_id = $1 WHERE workspace_id = $2', [userId, LOCAL_SCOPE.workspaceId])
-      return 'claimed'
+      return 'claimed' as const
     })
+    for (const channelUrl of replaced) removeWorkspace(channelUrl)
+    return outcome
   }
 }

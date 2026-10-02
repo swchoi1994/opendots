@@ -52,9 +52,9 @@ export async function GET(_request: Request, { params }: RouteContext) {
     headers: {
       'content-type': 'image/jpeg',
       'content-length': String(size),
-      // Every view passes the workspace or passcode check: a cached frame would
-        // outlive a sign-out or a workspace switch in a shared browser.
-        'cache-control': 'private, no-store',
+      // Every view passes the passcode check: a cached frame would outlive a
+      // locked link or a changed passcode in a shared browser.
+      'cache-control': 'private, no-store',
     },
   })
 }

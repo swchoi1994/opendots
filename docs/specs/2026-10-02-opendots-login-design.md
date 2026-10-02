@@ -26,8 +26,8 @@ Bots, chats and knowledge documents belong to a workspace. With Clerk left uncon
 | Question | Decision |
 | --- | --- |
 | Clerk application | A new development application, **OpenDots**, created with the Clerk CLI. Keys live only in `.env.local`. |
-| Who may grant host-reaching tools in a team workspace | **Workspace admins only** (Clerk role `org:admin`). In a personal workspace the owner is the admin. |
-| Local-mode data when sign-in is turned on | **The first person to sign in claims it**, into their personal workspace, exactly once. |
+| Who may grant host-reaching tools in a team workspace | **Workspace admins only** (Clerk role `org:admin`). In a personal workspace the owner is the admin. *Superseded after the whole-branch review (owner's decision): admins who are also listed operators (`OPENDOTS_OPERATORS`), see §8.* |
+| Local-mode data when sign-in is turned on | **The first person to sign in claims it**, into their personal workspace, exactly once. *Superseded: the first operator, see §9.* |
 | Share links with sign-in on | **Kept as they are.** Link plus passcode, no account needed, and visitors never get host-reaching tools. |
 | Approach | **Clerk-native workspaces with a scoped store.** No local tables of users or memberships, and no webhooks. |
 
@@ -57,6 +57,7 @@ export interface Viewer {
   imageUrl: string | null
   workspaceId: string       // Clerk org id, the user's own id for the personal workspace, or 'local'
   role: 'admin' | 'member'
+  operator: boolean         // listed in OPENDOTS_OPERATORS; always true in local mode
 }
 ```
 
@@ -110,20 +111,21 @@ Rows that exist today stay in `local`. Messages, read receipts, sessions, screen
 **Host-reaching tools** are `files`, `shell`, `skills` and `web_browser` (the same list A uses for share-link visitors). `canGrantHostTools(viewer) = viewer.role === 'admin' && viewer.operator`. A shell in any workspace reaches every workspace, the database and the server's keys, and Clerk's default sign-up is open to anyone, so the right to grant these belongs to the server's operators (`OPENDOTS_OPERATORS`), exercised in workspaces they administer. The README tells operators to restrict sign-ups before exposing the server. Showing a bot's browser window needs the same right.
 
 On `createChannel` and `updateAssistant`, `assertToolChange(viewer, before, after)`:
-- for a member, any host-reaching tool in `after` that is not in `before` returns 403 `{ code: 'ADMIN_ONLY' }`;
+- for anyone who can't grant host-reaching tools (a member, or an admin who isn't an operator), any host-reaching tool in `after` that is not in `before` returns 403 `{ code: 'ADMIN_ONLY' }`;
 - removing tools is always allowed;
 - for a new bot, `before` is empty.
 
+**Operator admins only:** `PATCH /api/channels/:url/browser` (showing the bot's browser window), and opening it through an edit.
+
 **Also admin-only (403 for members):**
-- `PATCH /api/channels/:url/browser` (showing the bot's browser window);
 - deleting a bot, and deleting all bots;
 - deleting a knowledge document.
 
 **Everyone in the workspace** can chat with any bot, create bots without host-reaching tools, upload documents, and make share links.
 
-**Running a bot.** A turn runs with the bot's stored tools, whoever sent the message. An admin who granted Terminal vouches for that bot. So no bot in an organization holds a host-reaching tool an admin didn't grant: starter bots there are seeded without them, and a stored bot with no tool list reads as having none of them.
+**Running a bot.** A turn runs with the bot's stored tools, whoever sent the message. The operator who granted Terminal vouches for that bot. So no bot holds a host-reaching tool an operator didn't grant: starter bots have them only in `local` and an operator's personal workspace, and a stored bot with no tool list reads as having none of them. Removing someone from `OPENDOTS_OPERATORS` doesn't revoke what they already granted.
 
-**The UI** disables the host-reaching tool checkboxes for members, with the hint "Only workspace admins can turn this on". It's a convenience; the server rule above is the real gate.
+**The UI** disables the host-reaching tool checkboxes for anyone who can't grant them, with the hint "Only workspace admins who operate this server can turn this on" (a member) or "Only this server's operators can turn this on" (an admin who isn't one). It's a convenience; the server rule above is the real gate.
 
 ## 9. Claiming local data
 
@@ -173,7 +175,7 @@ The memory store implements the same rule. Its data doesn't survive a restart, w
 
 - `viewerFromAuth`: personal workspace, organization admin, organization member, and missing claims.
 - `authMode` under each combination of the two variables.
-- `assertToolChange`: a member adding Terminal is refused; a member removing Terminal is allowed; an admin may do anything; a new bot made by a member with Files is refused.
+- `assertToolChange`: a member adding Terminal is refused; an admin who isn't an operator adding Terminal is refused; anyone removing Terminal is allowed; an operator admin may add it; a new bot made by a member with Files is refused.
 - The repository contract (memory store and PGlite):
   - two workspaces never see each other's channels or skills;
   - naming another workspace's channel returns 404, the same as a missing one;

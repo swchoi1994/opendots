@@ -461,6 +461,17 @@ export function createMemoryRepository(scope: Scope): ChatRepository {
       if (current.claims.has('local_data')) return 'already'
       current.claims.set('local_data', userId)
       const localPerson = LOCAL_SCOPE.actor.userId
+      // Signed in before being listed as an operator, their workspace got a
+      // starter set. Untouched ones (only the bot has written) give way to the
+      // claimed bots, or every name would appear twice; any they used stays.
+      if ([...current.channels.values()].some((channel) => channel.workspaceId === LOCAL_SCOPE.workspaceId)) {
+        for (const entry of ROSTER) {
+          const channelUrl = seedChannelUrl(entry.slug, userId)
+          const channel = current.channels.get(channelUrl)
+          const untouched = (current.messages.get(channelUrl) ?? []).every((message) => message.sender.userId === `bot_${channelUrl}`)
+          if (channel?.workspaceId === userId && untouched) dropChannel(current, channelUrl)
+        }
+      }
       for (const channel of current.channels.values()) {
         if (channel.workspaceId !== LOCAL_SCOPE.workspaceId) continue
         channel.workspaceId = userId

@@ -17,7 +17,7 @@ test('by default OpenDots listens on 127.0.0.1, and extra arguments pass through
 test('without sign-in, only loopback addresses are allowed', () => {
   for (const host of ['127.0.0.1', 'localhost', 'LOCALHOST', '::1', '[::1]']) {
     assert.ok(isLoopback(host), host)
-    assert.deepEqual(startArgs({ OPENDOTS_LISTEN_HOST: host }), { args: ['start', '-H', host] })
+    assert.deepEqual(startArgs({ OPENDOTS_LISTEN_HOST: host }), { args: ['start', '-H', host === '[::1]' ? '::1' : host] })
     // A server started on it must answer to it.
     const hostHeader = host === '::1' ? '[::1]:3000' : `${host}:3000`
     assert.equal(checkRequest({ method: 'GET', pathname: '/', host: hostHeader, origin: null, secFetchSite: null }, []).ok, true, host)
@@ -51,4 +51,11 @@ test("the start script's idea of sign-in is the app's", () => {
     const allowedPublic = !startArgs({ ...env, OPENDOTS_LISTEN_HOST: '0.0.0.0' }).error
     assert.equal(allowedPublic, authMode(env) === 'clerk', JSON.stringify(env))
   }
+})
+
+test('the Node inspector is refused through NODE_OPTIONS too, since .env files feed the environment Next inherits', () => {
+  for (const value of ['--inspect', '--inspect=0.0.0.0:9229', '--max-old-space-size=4096 --inspect-brk']) {
+    assert.match(startArgs({ NODE_OPTIONS: value }).error ?? '', /inspect/, value)
+  }
+  assert.deepEqual(startArgs({ NODE_OPTIONS: '--max-old-space-size=4096' }), { args: ['start', '-H', '127.0.0.1'] })
 })
