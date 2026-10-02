@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { scrubbedEnv } from '../ai/claude-code'
+import { baseEnv } from '../ai/brain-env'
 import type { CommandRunner } from '../ai/tools/skills-sh'
 
 /**
@@ -104,12 +104,12 @@ const defaultRunner: CommandRunner = (cmd, args, { cwd, timeoutMs }) =>
       cwd,
       timeout: timeoutMs,
       maxBuffer: 8 * 1024 * 1024,
-      // scrubbedEnv keeps only PATH/HOME (plus a few others) so a bot with `shell` or
+      // baseEnv keeps only PATH/HOME (plus a few others) so a bot with `shell` or
       // `web_browser` granted never inherits DATABASE_URL and friends; agent-browser
       // needs HOME (for ~/.agent-browser) and PATH, both in the allowlist. The cast is
-      // Next's doing: it augments NODE_ENV to a literal union, which scrubbedEnv's
+      // Next's doing: it augments NODE_ENV to a literal union, which baseEnv's
       // plain Record<string, string> does not satisfy structurally.
-      env: { ...scrubbedEnv(process.env), NO_COLOR: '1' } as unknown as NodeJS.ProcessEnv,
+      env: baseEnv(process.env) as unknown as NodeJS.ProcessEnv,
     }, (error, stdout, stderr) => {
       // A missing binary is not a page-level failure the bot could retry its way
       // out of, and Node reports it as ENOENT rather than an exit status. Map it

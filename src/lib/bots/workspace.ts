@@ -1,5 +1,6 @@
 import { mkdirSync, rmSync } from 'node:fs'
-import { relative, resolve, isAbsolute } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
+import { dataDir } from '../data-dir'
 
 /**
  * A bot's workspace is its "computer": the cwd the Agent SDK runs in, where
@@ -8,10 +9,9 @@ import { relative, resolve, isAbsolute } from 'node:path'
  * hostile url can never escape the root.
  */
 
-const DEFAULT_ROOT = './.opendots/workspaces'
-
 export function workspacesRoot(): string {
-  return resolve(process.env.OPENDOTS_WORKSPACES_DIR || DEFAULT_ROOT)
+  // Runtime path (see data-dir.ts): ignored by file tracing.
+  return resolve(/*turbopackIgnore: true*/ process.env.OPENDOTS_WORKSPACES_DIR || join(dataDir(), 'workspaces'))
 }
 
 function safeName(channelUrl: string): string {
@@ -25,14 +25,14 @@ function safeName(channelUrl: string): string {
 }
 
 export function workspaceFor(channelUrl: string): string {
-  const dir = resolve(workspacesRoot(), safeName(channelUrl))
+  const dir = resolve(/*turbopackIgnore: true*/ workspacesRoot(), safeName(channelUrl))
   mkdirSync(resolve(dir, '.claude', 'skills'), { recursive: true })
   return dir
 }
 
 export function removeWorkspace(channelUrl: string): void {
   try {
-    const dir = resolve(workspacesRoot(), safeName(channelUrl))
+    const dir = resolve(/*turbopackIgnore: true*/ workspacesRoot(), safeName(channelUrl))
     const rel = relative(workspacesRoot(), dir)
     // Refuse if relative path is empty, absolute, or escapes the root via '..'.
     if (!rel || isAbsolute(rel) || rel.startsWith('..')) return

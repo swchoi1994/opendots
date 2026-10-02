@@ -7,12 +7,14 @@ import {
   DEFAULT_ASSISTANT,
   DEFAULT_GUARDRAILS,
   DEFAULT_MEMORY,
-  MODEL_CATALOG,
   TOOL_CATALOG,
+  shellBrowserWarning,
   type AssistantConfig,
   type ToolName,
 } from '@/lib/domain/assistant'
 import { AVATAR_COLORS, AVATAR_SHAPES, avatarFromName, type BotAvatar as BotAvatarModel } from '@/lib/domain/avatar'
+import { useModelOptions } from '@/hooks/useModelOptions'
+import { optionState } from '@/lib/domain/models'
 import type { Skill } from '@/lib/domain/skill'
 
 interface NewBotDialogProps {
@@ -84,7 +86,8 @@ export function ModelSelect({
   onChange: (model: string) => void
   idPrefix?: string
 }) {
-  const isCustom = !MODEL_CATALOG.some((entry) => entry.id === value)
+  const { options, confirmed } = useModelOptions()
+  const isCustom = !options.some((entry) => entry.id === value)
   const customInputRef = useRef<HTMLInputElement>(null)
 
   return (
@@ -106,11 +109,14 @@ export function ModelSelect({
         }}
         className="rounded-lg border border-line px-3 py-2 text-[14px] outline-none focus:border-ink-900"
       >
-        {MODEL_CATALOG.map((entry) => (
-          <option key={entry.id} value={entry.id}>
-            {entry.label}
-          </option>
-        ))}
+        {options.map((entry) => {
+          const { disabled, label } = optionState(entry, { value, confirmed })
+          return (
+            <option key={entry.id} value={entry.id} disabled={disabled}>
+              {label}
+            </option>
+          )
+        })}
         <option value={CUSTOM_MODEL_VALUE}>Other…</option>
       </select>
       {isCustom && (
@@ -120,7 +126,7 @@ export function ModelSelect({
           type="text"
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          placeholder="claude-sonnet-4-5-20250929"
+          placeholder="ollama/qwq:latest or claude-sonnet-5"
           className="mt-1 rounded-lg border border-line px-3 py-2 text-[14px] outline-none focus:border-ink-900"
         />
       )}
@@ -238,7 +244,6 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
     setIsSubmitting(true)
     try {
       await onCreate(name.trim(), {
-        provider: 'claude_code',
         model: resolvedModel,
         name: name.trim(),
         avatar,
@@ -361,6 +366,11 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
                   </span>
                 </label>
               ))}
+              {shellBrowserWarning(tools) && (
+                <p role="alert" className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
+                  {shellBrowserWarning(tools)}
+                </p>
+              )}
             </fieldset>
 
             <fieldset className="flex flex-col gap-1.5">

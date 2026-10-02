@@ -7,8 +7,12 @@ import { runGoldenSet } from '../src/lib/eval/run'
 loadEnv(process.cwd())
 
 // The golden set asserts configuration through the planner's DRY-RUN answer,
-// so force dry-run here: the suite never spends subscription usage.
+// so force dry-run here: the suite never calls a model.
 process.env.BRAIN_DRY_RUN = '1'
+
+// And the in-memory store: the golden set uploads skills as fixtures, which
+// must never land in the operator's real database.
+process.env.DATA_STORE = 'memory'
 
 /**
  * CLI entry point: `pnpm eval`.

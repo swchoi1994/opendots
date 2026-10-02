@@ -1,4 +1,5 @@
 import { parseAvatar, type BotAvatar } from './avatar'
+import { DEFAULT_MODEL_ID } from './models'
 
 /**
  * Per-bot configuration.
@@ -36,7 +37,7 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
     id: 'files',
     label: 'Files',
     description:
-      'Read, write, and search files. Runs as the server user with the bot\'s workspace as the working directory; not sandboxed to it yet.',
+      'Read, write, and search files inside the bot\'s own workspace. Paths outside it are refused, and the bot can\'t change its own configuration files.',
     available: true,
   },
   {
@@ -60,34 +61,13 @@ export const TOOL_CATALOG: ToolDescriptor[] = [
   },
 ]
 
-/** Claude on the operator's subscription is the only provider. */
-export type LlmProviderId = 'claude_code'
+export const SHELL_BROWSER_WARNING =
+  'This bot can browse the web and run commands on this computer. A web page could tell it to run commands. Turn both on only for sites you trust.'
 
-export interface ProviderDescriptor {
-  id: LlmProviderId
-  label: string
-  modelLabel: string
-  defaultModel: string
-  requiredEnv: string[]
+/** Browser + Terminal is the combination a web page can turn into commands on the host. */
+export function shellBrowserWarning(tools: readonly ToolName[]): string | null {
+  return tools.includes('shell') && tools.includes('web_browser') ? SHELL_BROWSER_WARNING : null
 }
-
-export const PROVIDER_CATALOG: ProviderDescriptor[] = [
-  {
-    id: 'claude_code',
-    label: 'Claude (subscription)',
-    modelLabel: 'Model',
-    defaultModel: 'sonnet',
-    // Nothing required: the local `claude` login is used. The token is the
-    // fallback for hosts without a keychain (Docker, a VM).
-    requiredEnv: [],
-  },
-]
-
-export const MODEL_CATALOG: { id: string; label: string }[] = [
-  { id: 'sonnet', label: 'Claude Sonnet (balanced)' },
-  { id: 'opus', label: 'Claude Opus (deepest)' },
-  { id: 'haiku', label: 'Claude Haiku (fastest)' },
-]
 
 export interface MemoryConfig {
   enabled: boolean
@@ -122,8 +102,7 @@ export interface BrowserConfig {
 export const DEFAULT_BROWSER: BrowserConfig = { headed: false }
 
 export interface AssistantConfig {
-  provider: LlmProviderId
-  /** Model alias (`sonnet`, `opus`, `haiku`) or a full Claude model id. */
+  /** `default`, `ollama/<name>`, or an Anthropic API model id (see domain/models.ts). */
   model: string
   /** Display name of the bot, e.g. "Chief of Staff". */
   name: string
@@ -139,8 +118,7 @@ export interface AssistantConfig {
 }
 
 export const DEFAULT_ASSISTANT: AssistantConfig = {
-  provider: 'claude_code',
-  model: 'sonnet',
+  model: DEFAULT_MODEL_ID,
   name: 'Assistant',
   avatar: { shape: 'blob', color: 'violet' },
   systemMessage: 'You are a helpful teammate in a team chat. Be concise and specific.',
@@ -158,10 +136,6 @@ export function isToolName(value: unknown): value is ToolName {
 /** Grantable now: listed AND available. */
 export function isGrantableTool(value: unknown): value is ToolName {
   return TOOL_CATALOG.some((tool) => tool.id === value && tool.available)
-}
-
-export function isProviderId(value: unknown): value is LlmProviderId {
-  return PROVIDER_CATALOG.some((provider) => provider.id === value)
 }
 
 /**
@@ -222,5 +196,5 @@ export function parseAssistantConfig(input: unknown, fallbackName?: string): Ass
     headed: typeof rawBrowser.headed === 'boolean' ? rawBrowser.headed : DEFAULT_BROWSER.headed,
   }
 
-  return { provider: 'claude_code', model, name, avatar, systemMessage, tools, memory, guardrails, skillIds, browser }
+  return { model, name, avatar, systemMessage, tools, memory, guardrails, skillIds, browser }
 }

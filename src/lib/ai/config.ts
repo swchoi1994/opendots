@@ -1,16 +1,14 @@
-import { describeBrain, type BrainStatus } from './claude-code'
+import { describeBrain, type BrainStatus } from './brain'
 
 /**
  * Env-driven configuration for the brain and knowledge search. Nothing here
  * touches the network at import time, so it is safe during `next build`.
+ * Which model a bot runs on is per bot (domain/models.ts, ai/model-catalog.ts).
  */
 
 export type VectorStoreKind = 'memory' | 'pgvector'
 
 export interface BrainConfig {
-  provider: 'claude_code'
-  /** Default model alias for new bots; each bot may override. */
-  defaultModel: string
   /** Cap on tool-use rounds per turn. */
   maxTurns: number
   /** Optional spend ceiling per turn; null means none. */
@@ -63,8 +61,6 @@ export function getAiConfig(): AiConfig {
   const vectorStore = env('RAG_VECTOR_STORE')
   return {
     brain: {
-      provider: 'claude_code',
-      defaultModel: env('CLAUDE_MODEL') ?? 'sonnet',
       maxTurns: envInt('BOT_MAX_TURNS', 12),
       maxBudgetUsd: budget > 0 ? budget : null,
       dryRun: describeBrain().mode === 'dry-run',
@@ -82,11 +78,11 @@ export function getAiConfig(): AiConfig {
 
 /** Non-secret view for the health endpoint and the UI. */
 export function describeAiConfig(config: AiConfig = getAiConfig()): {
-  brain: BrainStatus & { defaultModel: string; maxTurns: number }
+  brain: BrainStatus & { maxTurns: number }
   rag: { enabled: boolean; vectorStore: VectorStoreKind; topK: number }
 } {
   return {
-    brain: { ...describeBrain(), defaultModel: config.brain.defaultModel, maxTurns: config.brain.maxTurns },
+    brain: { ...describeBrain(), maxTurns: config.brain.maxTurns },
     rag: { enabled: config.rag.enabled, vectorStore: config.rag.vectorStore, topK: config.rag.topK },
   }
 }

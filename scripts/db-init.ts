@@ -1,56 +1,38 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { Pool } from 'pg'
+import { openDb, storeKind } from '../src/lib/db'
+import { migrate } from '../src/lib/migrate'
 import { loadEnv } from './load-env'
 
 /**
- * One-shot schema initialiser: `pnpm db:init`.
+ * `pnpm db:init`: applies pending db/*.sql migrations now. The app already
+ * does this on first use; this is for readying a Postgres server before the
+ * app starts, or for seeing what a migration run does.
  *
- * docker compose would have run every db/*.sql file automatically the first
- * time the Postgres volume was created (the docker-entrypoint-initdb.d
- * mount). Running without Docker, nothing does that for us, so this script
- * applies the same files, in name order, against whatever DATABASE_URL
- * points at.
- *
- * It reuses the `pg` driver already in the project and loads .env/.env.local the
- * exact way Next.js does, so the connection string resolves identically here and
- * in the running app. Each file is idempotent (CREATE ... IF NOT EXISTS), so
- * re-running this is safe.
+ * Stop OpenDots first when using the embedded database: two processes must
+ * never open the same PGlite data directory, and openDb refuses (naming the
+ * pid that holds it) while the app has it open.
  */
 async function main() {
   loadEnv(process.cwd())
-
-  const connectionString = process.env.DATABASE_URL
-  if (!connectionString) {
-    console.error('DATABASE_URL is not set — add it to .env.local first.')
+  const kind = storeKind()
+  if (kind === 'memory') {
+    console.error('DATA_STORE=memory keeps nothing on disk, so there is nothing to migrate.')
     process.exit(1)
   }
-
-  const dir = join(process.cwd(), 'db')
-  const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
-
-  const pool = new Pool({ connectionString })
+  const { db, close } = await openDb(kind)
   try {
-    for (const file of files) {
-      await pool.query(readFileSync(join(dir, file), 'utf8'))
-      console.log(`Applied db/${file}`)
-    }
-
-    const { rows } = await pool.query<{ table_name: string }>(
-      `SELECT table_name FROM information_schema.tables
-       WHERE table_schema = 'public'
-       ORDER BY table_name`,
+    const applied = await migrate(db)
+    console.log(applied.length > 0 ? `Applied: ${applied.join(', ')}` : 'Already up to date.')
+    const { rows } = await db.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`,
     )
-    console.log('Public tables now present:')
-    for (const row of rows) console.log('  -', row.table_name)
-
-    const { rows: ext } = await pool.query<{ extname: string }>(
-      `SELECT extname FROM pg_extension WHERE extname = 'vector'`,
-    )
-    console.log(ext.length ? 'pgvector extension: enabled' : 'pgvector extension: MISSING')
+    console.log(`Tables (${kind}): ${rows.map((row) => row.table_name).join(', ')}`)
   } finally {
-    await pool.end()
+    await close()
   }
 }
 
-void main()
+main().catch((error: unknown) => {
+  // A plain message, not a stack trace: the usual cause is "the app is running".
+  console.error(error instanceof Error ? error.message : error)
+  process.exit(1)
+})

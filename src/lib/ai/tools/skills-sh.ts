@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process'
-import { existsSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
-import { scrubbedEnv } from '../claude-code'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join } from 'node:path'
+import { baseEnv } from '../brain-env'
 
 /**
  * skills.sh client.
@@ -49,8 +50,8 @@ const defaultRunner: CommandRunner = (cmd, args, { cwd, timeoutMs }) =>
       cmd,
       args,
       // The cast is Next's doing: its `global.d.ts` makes `NODE_ENV` a required
-      // literal union, which scrubbedEnv's plain Record<string, string> cannot satisfy.
-      { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env: { ...scrubbedEnv(process.env), CI: '1' } as unknown as NodeJS.ProcessEnv },
+      // literal union, which baseEnv's plain Record<string, string> cannot satisfy.
+      { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env: { ...baseEnv(process.env), CI: '1' } as unknown as NodeJS.ProcessEnv },
       (error, stdout, stderr) => {
         const code =
           error && typeof (error as NodeJS.ErrnoException & { code?: unknown }).code === 'number'
@@ -149,17 +150,6 @@ export async function searchSkills(
   return parseSkillsFindOutput(stdout).slice(0, limit)
 }
 
-/** Every `<dir>/SKILL.md` under `skillsDir` right now, with its mtime. */
-function snapshotSkills(skillsDir: string): Map<string, number> {
-  const snapshot = new Map<string, number>()
-  if (!existsSync(skillsDir)) return snapshot
-  for (const name of readdirSync(skillsDir)) {
-    const md = join(skillsDir, name, 'SKILL.md')
-    if (existsSync(md)) snapshot.set(name, statSync(md).mtimeMs)
-  }
-  return snapshot
-}
-
 /**
  * The SKILL.md this run actually produced.
  *
@@ -192,23 +182,45 @@ export async function installSkill(
   const valid = validateSkillRef(ref)
   const skill = valid.slice(valid.indexOf('@') + 1)
   const runner = opts.runner ?? defaultRunner
-  const skillsDir = join(workspaceDir, '.claude', 'skills')
-  const before = snapshotSkills(skillsDir)
 
-  const { code, stderr, stdout } = await runner(
-    'npx',
-    ['-y', 'skills@latest', 'add', valid, '-y', '-a', 'claude-code', '--copy'],
-    { cwd: workspaceDir, timeoutMs: INSTALL_TIMEOUT_MS },
-  )
-  if (code !== 0) {
-    throw new Error(`skills add failed (${code}): ${(stderr || stdout).trim().slice(-800)}`)
-  }
-
-  const path = findInstalledSkillMd(skillsDir, skill, before)
-  if (!path) {
-    throw new Error(
-      `skills add exited 0 but wrote no new skill under .claude/skills — is "${valid}" already installed?`,
+  // npx runs in a staging directory OpenDots creates, never in the workspace:
+  // npm reads a project .npmrc by walking up from its cwd, so a bot that wrote
+  // <workspace>/.npmrc (registry=…) could otherwise choose the code npx runs.
+  const staging = mkdtempSync(join(tmpdir(), 'opendots-skill-'))
+  try {
+    const stagedSkills = join(staging, '.claude', 'skills')
+    const { code, stderr, stdout } = await runner(
+      'npx',
+      ['-y', 'skills@latest', 'add', valid, '-y', '-a', 'claude-code', '--copy'],
+      { cwd: staging, timeoutMs: INSTALL_TIMEOUT_MS },
     )
+    if (code !== 0) {
+      throw new Error(`skills add failed (${code}): ${(stderr || stdout).trim().slice(-800)}`)
+    }
+
+    const staged = findInstalledSkillMd(stagedSkills, skill, new Map())
+    if (!staged) {
+      throw new Error(
+        `skills add exited 0 but wrote no skill — check that "${valid}" exists on skills.sh.`,
+      )
+    }
+
+    // Copied next to its destination first (the temp dir and the workspace can
+    // be on different volumes), then swapped in with a rename, so a failed copy
+    // never leaves a re-installed skill half-written or gone.
+    const folder = basename(dirname(staged))
+    const target = join(workspaceDir, '.claude', 'skills', folder)
+    const incoming = `${target}.incoming-${process.pid}`
+    mkdirSync(dirname(target), { recursive: true })
+    try {
+      cpSync(dirname(staged), incoming, { recursive: true })
+      rmSync(target, { recursive: true, force: true })
+      renameSync(incoming, target)
+    } finally {
+      rmSync(incoming, { recursive: true, force: true })
+    }
+    return { skill, path: join(target, 'SKILL.md') }
+  } finally {
+    rmSync(staging, { recursive: true, force: true })
   }
-  return { skill, path }
 }

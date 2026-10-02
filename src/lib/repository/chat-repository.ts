@@ -1,4 +1,5 @@
 import type { AssistantConfig } from '../domain/assistant'
+import type { ProviderId } from '../domain/models'
 import type { NewScreen, Screen } from '../domain/screen'
 import type { Skill } from '../domain/skill'
 import type {
@@ -30,6 +31,12 @@ export interface Deployment {
 
 export const DeploymentNotFound = (deploymentId: string) =>
   new RepositoryError(`No deployment with id "${deploymentId}"`, 404, 'DEPLOYMENT_NOT_FOUND')
+
+/** A bot's Agent SDK session and the provider that created it (null: unknown, from before that was recorded). */
+export interface BotSession {
+  sessionId: string
+  provider: ProviderId | null
+}
 
 export interface CreateChannelInput {
   name: string
@@ -66,9 +73,9 @@ export interface ChatRepository {
   deployChannel(channelUrl: string): Promise<Deployment>
   getDeployment(deploymentId: string): Promise<Deployment | null>
 
-  /** Agent SDK session id for this bot, so context survives restarts. */
-  getBotSession(channelUrl: string): Promise<string | null>
-  setBotSession(channelUrl: string, sessionId: string): Promise<void>
+  /** Agent SDK session for this bot, so context survives restarts. */
+  getBotSession(channelUrl: string): Promise<BotSession | null>
+  setBotSession(channelUrl: string, sessionId: string, provider: ProviderId): Promise<void>
   clearBotSession(channelUrl: string): Promise<void>
 
   appendScreen(input: NewScreen): Promise<Screen>

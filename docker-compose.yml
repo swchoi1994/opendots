@@ -1,11 +1,11 @@
-# Local production-shaped stack: the app and a vector-capable Postgres. The
-# brain is Claude via the Agent SDK on the operator's subscription — no model
-# services live here. `redis` is kept for Phase 3 (automations) but Phase 1
-# does not use it; the app service no longer depends on it.
+# OpenDots and a Postgres server with pgvector. Only the app is published, and
+# only on 127.0.0.1: there is no sign-in yet, so nothing here should face a
+# network. Postgres is reachable from the app alone (and never collides with a
+# Postgres already running on the host).
 #
-# Run:  docker compose up --build
-#       docker compose logs -f app
-#       docker compose down -v      (-v also drops the volumes, resetting data)
+#   docker compose up --build
+#   docker compose logs -f app
+#   docker compose down -v        (-v also drops the data volumes)
 
 services:
   app:
@@ -13,25 +13,27 @@ services:
       context: .
       target: runtime
     ports:
-      - '3000:3000'
+      - '127.0.0.1:3000:3000'
     environment:
-      # Service names are DNS inside the compose network — "postgres"
-      # resolves to the container, not to localhost.
+      DATA_STORE: postgres
+      # Service names are DNS inside the compose network.
       DATABASE_URL: postgres://opendots:opendots@postgres:5432/opendots
-      DATA_STORE: ${DATA_STORE:-postgres}
-      RAG_VECTOR_STORE: ${RAG_VECTOR_STORE:-memory}
-      # Brain: inside a container there is no keychain login. Run `claude setup-token`
-      # on your machine once and pass the token through; never bake it into the image.
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      CLAUDE_MODEL: ${CLAUDE_MODEL:-sonnet}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      # Ollama on the host machine.
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OPENDOTS_DEFAULT_MODEL: ${OPENDOTS_DEFAULT_MODEL:-}
       BOT_MAX_TURNS: ${BOT_MAX_TURNS:-12}
-      OPENDOTS_WORKSPACES_DIR: /data/workspaces
-      DEPLOYMENT_SESSION_SECRET: ${DEPLOYMENT_SESSION_SECRET:-dev-only-change-me}
+      OPENDOTS_DATA_DIR: /data
+      # Empty means a random key per process; set one to keep share-link sessions across restarts.
+      DEPLOYMENT_SESSION_SECRET: ${DEPLOYMENT_SESSION_SECRET:-}
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     volumes:
-      - bot-workspaces:/data/workspaces
+      - opendots-data:/data
     depends_on:
-      # service_healthy, not just service_started: otherwise the app races the
-      # database and dies on first connect.
+      # service_healthy, not service_started: the app migrates on first use and
+      # must not race the database.
       postgres:
         condition: service_healthy
     restart: unless-stopped
@@ -43,14 +45,8 @@ services:
       POSTGRES_USER: opendots
       POSTGRES_PASSWORD: opendots
       POSTGRES_DB: opendots
-    ports:
-      # Exposed so you can psql from the host while developing.
-      - '5432:5432'
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      # Files here run once, on first init of an EMPTY data volume. Editing them
-      # later does nothing until you `docker compose down -v`.
-      - ./db:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U opendots -d opendots']
       interval: 5s
@@ -58,22 +54,6 @@ services:
       retries: 10
     restart: unless-stopped
 
-  redis:
-    image: redis:8-alpine
-    # appendonly keeps data across restarts; drop it if you want a pure cache.
-    command: ['redis-server', '--appendonly', 'yes']
-    ports:
-      - '6379:6379'
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
 volumes:
   postgres-data:
-  redis-data:
-  bot-workspaces:
+  opendots-data:

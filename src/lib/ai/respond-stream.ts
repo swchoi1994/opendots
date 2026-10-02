@@ -30,7 +30,7 @@ export async function buildRespondStream(
   /*
    * Tied to the response body: when the client disconnects the platform calls
    * `cancel()`, which aborts the turn. Without it the SDK subprocess keeps
-   * running — and keeps spending subscription usage — on a reply nobody reads.
+   * running — and keeps spending API usage — on a reply nobody reads.
    */
   const abort = new AbortController()
 

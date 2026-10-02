@@ -4,7 +4,7 @@ import './globals.css'
 export const metadata: Metadata = {
   title: 'OpenDots',
   description:
-    'OpenDots — your always-on team of AI coworkers, powered by Claude on your subscription',
+    'OpenDots — your always-on team of AI coworkers, on Claude or on local models through Ollama',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

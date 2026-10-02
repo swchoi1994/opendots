@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 
 /**
  * Signed cookie proving a visitor entered a deployment's passcode.
@@ -11,13 +11,32 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 const COOKIE_PREFIX = 'opendots_deploy_'
 
 /**
- * Falls back to a per-process secret when none is configured. That is fine for
- * local development and deliberately NOT fine for anything shared: restarting
- * invalidates every session, which is a visible failure rather than a silent
- * one that leaves sessions forgeable with a known key.
+ * The HMAC key for share-link sessions. An unset OR EMPTY variable (Compose
+ * passes "" for one that is unset) falls back to 32 random bytes per process:
+ * a restart then invalidates every session, which is a visible failure rather
+ * than sessions signed with a known or empty key.
  */
-const SESSION_SECRET =
-  process.env.DEPLOYMENT_SESSION_SECRET ?? `dev-only-${process.pid}-${Date.now()}`
+export function sessionSecret(env: Partial<NodeJS.ProcessEnv> = process.env): string {
+  return env.DEPLOYMENT_SESSION_SECRET || randomBytes(32).toString('hex')
+}
+
+const globalForSession = globalThis as typeof globalThis & { __opendotsSessionSecret?: string }
+
+/**
+ * The key this process signs with: the configured secret, or one random key
+ * parked on globalThis. Dev hot reload re-evaluates this module; a fresh
+ * random key on every reload would sign every share-link visitor out.
+ */
+export function processSecret(
+  env: Partial<NodeJS.ProcessEnv> = process.env,
+  holder: { __opendotsSessionSecret?: string } = globalForSession,
+): string {
+  if (env.DEPLOYMENT_SESSION_SECRET) return env.DEPLOYMENT_SESSION_SECRET
+  holder.__opendotsSessionSecret ??= sessionSecret(env)
+  return holder.__opendotsSessionSecret
+}
+
+const SESSION_SECRET = processSecret()
 
 export function cookieNameFor(deploymentId: string): string {
   return `${COOKIE_PREFIX}${deploymentId}`

@@ -297,10 +297,8 @@ export function useChat() {
             const { error: detail, kind } = data as { error?: string; kind?: string }
             setError(
               kind === 'usage_limit'
-                ? 'Claude usage limit reached for this subscription window. The bot will answer again once it resets.'
-                : kind === 'auth'
-                  ? 'Claude is not logged in on this machine. Run `claude login` in a terminal, then retry.'
-                  : (detail ?? 'Bot could not respond'),
+                ? 'The model provider reported a rate or usage limit. The bot will answer again once it resets.'
+                : (detail ?? 'Bot could not respond'),
             )
           }
         })
