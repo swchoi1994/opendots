@@ -7,5 +7,8 @@ import { resolve } from 'node:path'
  * container volume or a backup wants.
  */
 export function dataDir(env: Partial<NodeJS.ProcessEnv> = process.env): string {
-  return resolve(env.OPENDOTS_DATA_DIR || '.opendots')
+  // A runtime location, not a build input: without the ignore comment, file
+  // tracing treats this cwd-relative path as "the whole project" and copies
+  // src/, docs/ and scripts/ into the standalone (Docker) output.
+  return resolve(/*turbopackIgnore: true*/ env.OPENDOTS_DATA_DIR || '.opendots')
 }

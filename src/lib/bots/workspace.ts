@@ -10,7 +10,8 @@ import { dataDir } from '../data-dir'
  */
 
 export function workspacesRoot(): string {
-  return resolve(process.env.OPENDOTS_WORKSPACES_DIR || join(dataDir(), 'workspaces'))
+  // Runtime path (see data-dir.ts): ignored by file tracing.
+  return resolve(/*turbopackIgnore: true*/ process.env.OPENDOTS_WORKSPACES_DIR || join(dataDir(), 'workspaces'))
 }
 
 function safeName(channelUrl: string): string {
@@ -24,14 +25,14 @@ function safeName(channelUrl: string): string {
 }
 
 export function workspaceFor(channelUrl: string): string {
-  const dir = resolve(workspacesRoot(), safeName(channelUrl))
+  const dir = resolve(/*turbopackIgnore: true*/ workspacesRoot(), safeName(channelUrl))
   mkdirSync(resolve(dir, '.claude', 'skills'), { recursive: true })
   return dir
 }
 
 export function removeWorkspace(channelUrl: string): void {
   try {
-    const dir = resolve(workspacesRoot(), safeName(channelUrl))
+    const dir = resolve(/*turbopackIgnore: true*/ workspacesRoot(), safeName(channelUrl))
     const rel = relative(workspacesRoot(), dir)
     // Refuse if relative path is empty, absolute, or escapes the root via '..'.
     if (!rel || isAbsolute(rel) || rel.startsWith('..')) return

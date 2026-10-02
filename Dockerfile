@@ -9,7 +9,9 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
 RUN corepack enable
-COPY package.json pnpm-lock.yaml ./
+# pnpm-workspace.yaml carries the release-age exclusions and build approvals;
+# without it a frozen install rejects packages the lockfile already pins.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # ---- build ------------------------------------------------------------------
@@ -21,7 +23,11 @@ COPY . .
 # Never bake secrets in here: anything present at build time is recoverable
 # from the image layers. Runtime configuration arrives via env at `docker run`.
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN pnpm build
+# Standalone output is Docker-only (next.config.ts). The check fails the build
+# if the Agent SDK's native CLI is missing from it, or if source was traced in,
+# instead of shipping an image whose every bot turn fails.
+ENV OPENDOTS_STANDALONE=1
+RUN pnpm build && node scripts/check-standalone.mjs
 
 # ---- runtime ----------------------------------------------------------------
 FROM node:22-alpine AS runtime

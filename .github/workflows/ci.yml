@@ -20,3 +20,12 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm eval
+      - run: pnpm build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Builds the runtime image, which runs scripts/check-standalone.mjs: a
+      # missing native CLI or traced-in source fails here, not in production.
+      - run: docker build --target runtime -t opendots:ci .
