@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
-import type { AssistantConfig, ToolName } from '../../domain/assistant'
+import { HOST_TOOLS, type AssistantConfig, type ToolName } from '../../domain/assistant'
 import type { Screen } from '../../domain/screen'
 import { isUserMessage, type Message } from '../../domain/types'
 import { browserFor } from '../../browser/agent-browser'
@@ -40,7 +40,7 @@ export type TurnTrigger = 'user_message' | 'schedule' | 'event' | 'deployment_vi
  * browser session — its cookies, its logged-in sites — so granting it would let
  * anyone holding a share link steer an authenticated browser on the host.
  */
-export const VISITOR_RESTRICTED_TOOLS: ToolName[] = ['files', 'shell', 'skills', 'web_browser']
+export const VISITOR_RESTRICTED_TOOLS: ToolName[] = [...HOST_TOOLS]
 
 /** What a turn that produced neither text nor an error stores: a blank bubble reads as the bot ignoring you. */
 export const EMPTY_ANSWER = 'The model returned no answer. Try again, or pick a different model.'
