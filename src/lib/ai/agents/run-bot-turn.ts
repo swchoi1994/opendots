@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
-import type { AssistantConfig, ToolName } from '../../domain/assistant'
+import { HOST_TOOLS, type AssistantConfig, type ToolName } from '../../domain/assistant'
 import type { Screen } from '../../domain/screen'
 import { isUserMessage, type Message } from '../../domain/types'
 import { browserFor } from '../../browser/agent-browser'
 import { getRepository } from '../../repository'
-import type { ChatRepository } from '../../repository/chat-repository'
+import { LOCAL_SCOPE, type ChatRepository, type Scope } from '../../repository/chat-repository'
 import { workspaceFor } from '../../bots/workspace'
 import { DEFAULT_MODEL_ID, resolveModel, type ProviderId } from '../../domain/models'
 import { runBot, withoutCliName, type BotErrorKind } from '../brain'
@@ -40,7 +40,7 @@ export type TurnTrigger = 'user_message' | 'schedule' | 'event' | 'deployment_vi
  * browser session — its cookies, its logged-in sites — so granting it would let
  * anyone holding a share link steer an authenticated browser on the host.
  */
-export const VISITOR_RESTRICTED_TOOLS: ToolName[] = ['files', 'shell', 'skills', 'web_browser']
+export const VISITOR_RESTRICTED_TOOLS: ToolName[] = [...HOST_TOOLS]
 
 /** What a turn that produced neither text nor an error stores: a blank bubble reads as the bot ignoring you. */
 export const EMPTY_ANSWER = 'The model returned no answer. Try again, or pick a different model.'
@@ -68,6 +68,8 @@ export interface TurnContext {
   /** The provider that created `sessionId`; null when unknown. Only that provider may resume it. */
   sessionProvider: ProviderId | null
   trigger: TurnTrigger
+  /** The workspace the turn runs in and who asked: the bot reads and writes only there. */
+  scope: Scope
 }
 
 export type TurnEvent =
@@ -99,8 +101,9 @@ function isBotSender(userId: string): boolean {
 export async function loadTurnContext(
   channelUrl: string,
   trigger: TurnTrigger = 'user_message',
+  scope: Scope = LOCAL_SCOPE,
 ): Promise<TurnContext> {
-  const repo = getRepository()
+  const repo = getRepository(scope)
   const channel = await repo.getChannel(channelUrl)
   if (!channel) throw new TurnError(`No channel with url "${channelUrl}"`, 'CHANNEL_NOT_FOUND', 404)
   if (!channel.assistant) throw new TurnError('This conversation has no bot configured', 'NO_ASSISTANT', 400)
@@ -142,6 +145,7 @@ export async function loadTurnContext(
     sessionId: session?.sessionId ?? null,
     sessionProvider: session?.provider ?? null,
     trigger,
+    scope,
   }
 }
 
@@ -173,7 +177,7 @@ export async function* runBotTurn(
     resolveDefaultModel?: () => Promise<string>
   } = {},
 ): AsyncGenerator<TurnEvent> {
-  const repo = getRepository()
+  const repo = getRepository(ctx.scope)
   const config = getAiConfig()
   const { assistant, channelUrl } = ctx
   const run = deps.runBot ?? runBot
@@ -209,6 +213,7 @@ export async function* runBotTurn(
       memory: ctx.memory,
       bot: assistant,
       skillIds: assistant.skillIds,
+      repo,
       hasSession: resume !== null,
       restrictedTools: ctx.trigger === 'deployment_visitor' ? VISITOR_RESTRICTED_TOOLS : [],
     })
@@ -255,6 +260,7 @@ export async function* runBotTurn(
         : undefined
       if (browser) deps.onBrowserHook?.(onScreen)
       const server = createOpenDotsServer({
+        repo,
         skillIds: assistant.skillIds,
         workspaceDir,
         onRetrieved: (chunks) => retrieved.push(...chunks),

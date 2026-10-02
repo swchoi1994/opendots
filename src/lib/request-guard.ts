@@ -1,6 +1,6 @@
 /**
- * Who may talk to this server. There is no sign-in yet, so the boundary is the
- * machine: the server listens on 127.0.0.1, and this check (run by
+ * Who may talk to this server. Without sign-in the boundary is the machine:
+ * the server listens on 127.0.0.1, and this check (run by
  * src/proxy.ts on every request) closes the two ways a web page the operator
  * visits could still reach it.
  *
@@ -10,7 +10,9 @@
  *   listed in OPENDOTS_ALLOWED_HOSTS) is refused.
  * - Cross-site requests: a form or fetch from another site can POST without
  *   reading the answer, enough to send a bot a message and make it act. Every
- *   API call that changes something must come from this origin.
+ *   request that changes something must come from this origin, whatever its
+ *   path: Next also routes `/_next/data/<build>/api/….json` to the API, so a
+ *   rule keyed on `/api` alone has a side door.
  *
  * Pure, so it is tested without a server.
  */
@@ -31,7 +33,7 @@ const SAFE_METHODS = new Set(['GET', 'HEAD'])
 
 export const FOREIGN_HOST =
   'This OpenDots server only answers on 127.0.0.1, localhost or [::1]. To reach it by another name, list that name in OPENDOTS_ALLOWED_HOSTS.'
-export const CROSS_SITE = 'OpenDots refuses API calls that change something when they come from another site.'
+export const CROSS_SITE = 'OpenDots refuses requests that change something when they come from another site.'
 
 /** OPENDOTS_ALLOWED_HOSTS: comma-separated names, each optionally with a port. */
 export function allowedHostsFrom(env: Partial<NodeJS.ProcessEnv>): string[] {
@@ -75,7 +77,7 @@ export function checkRequest(request: RequestFacts, allowedHosts: string[]): Req
   if (!hostAllowed(request.host, allowedHosts)) return { ok: false, reason: FOREIGN_HOST }
 
   const changesSomething = !SAFE_METHODS.has(request.method.toUpperCase())
-  if (changesSomething && (request.pathname === '/api' || request.pathname.startsWith('/api/'))) {
+  if (changesSomething) {
     if (request.secFetchSite?.toLowerCase() === 'cross-site') return { ok: false, reason: CROSS_SITE }
     if (request.origin !== null && !sameOrigin(request.origin, request.host!)) return { ok: false, reason: CROSS_SITE }
   }

@@ -4,6 +4,7 @@ import { DeployedChat } from '@/components/DeployedChat'
 import { PasscodeGate } from '@/components/PasscodeGate'
 import { cookieNameFor, verifySession } from '@/lib/deployment-session'
 import { getRepository } from '@/lib/repository'
+import { visitorScope } from '@/lib/repository/chat-repository'
 
 interface PageProps {
   params: Promise<{ deploymentId: string }>
@@ -14,7 +15,7 @@ export async function generateMetadata({ params }: PageProps) {
   const deployment = await getRepository().getDeployment(deploymentId)
   if (!deployment) return { title: 'OpenDots' }
 
-  const channel = await getRepository().getChannel(deployment.channelUrl)
+  const channel = await getRepository(visitorScope(deployment)).getChannel(deployment.channelUrl)
   return { title: channel ? `${channel.name} — OpenDots` : 'OpenDots' }
 }
 
@@ -31,7 +32,7 @@ export default async function DeployedAppPage({ params }: PageProps) {
   const deployment = await getRepository().getDeployment(deploymentId)
   if (!deployment) notFound()
 
-  const channel = await getRepository().getChannel(deployment.channelUrl)
+  const channel = await getRepository(visitorScope(deployment)).getChannel(deployment.channelUrl)
   if (!channel) notFound()
 
   const jar = await cookies()

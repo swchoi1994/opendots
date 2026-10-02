@@ -1,11 +1,9 @@
 import { ImagePlaceholderIcon, ReadReceiptIcon, SentReceiptIcon } from './icons'
 import { MessageMarkdown } from './MessageMarkdown'
 import { ScreenStrip } from './ScreenStrip'
-import {
-  CURRENT_USER_ID,
-  type MessageProvenance,
-  type MessageWithReceipt,
-} from '@/lib/domain/types'
+import { useViewer } from './ViewerContext'
+import { LOCAL_VIEWER } from '@/lib/auth/viewer'
+import type { MessageProvenance, MessageWithReceipt } from '@/lib/domain/types'
 import { isUserMessage } from '@/lib/domain/types'
 import { formatTime } from '@/lib/format'
 import type { Screen } from '@/lib/domain/screen'
@@ -65,20 +63,21 @@ interface MessageBubbleProps {
   onOpenScreen?: (screenId: number) => void
 }
 
-export function MessageBubble({ entry, screens = [], onOpenScreen }: MessageBubbleProps) {
+export function MessageBubble({ entry, showSender, screens = [], onOpenScreen }: MessageBubbleProps) {
   const { message, unreadMemberCount } = entry
-  const isOwn = message.sender.userId === CURRENT_USER_ID
+  const isOwn = message.sender.userId === useViewer().userId
+  const isBot = message.sender.userId.startsWith('bot_') || message.sender.userId === 'user_assistant'
   const time = formatTime(message.createdAt)
   const isRead = unreadMemberCount === 0
 
   const body = isUserMessage(message) ? (
     <div
       className={`max-w-[560px] rounded-[18px] px-4 py-2.5 text-[15px] leading-relaxed break-words ${
-        isOwn ? 'bg-bubble-own text-white whitespace-pre-wrap' : 'bg-bubble text-ink-900'
+        isOwn ? 'bg-bubble-own text-white whitespace-pre-wrap' : isBot ? 'bg-bubble text-ink-900' : 'bg-bubble text-ink-900 whitespace-pre-wrap'
       }`}
     >
       {/* People type plain text (keep their line breaks); bots answer in Markdown. */}
-      {isOwn ? message.message : <MessageMarkdown text={message.message} />}
+      {isBot ? <MessageMarkdown text={message.message} /> : message.message}
     </div>
   ) : (
     <FilePlaceholder name={message.name} />
@@ -112,6 +111,13 @@ export function MessageBubble({ entry, screens = [], onOpenScreen }: MessageBubb
   return (
     <div className="flex items-end gap-2">
       <div className="min-w-0">
+        {/* In a team, someone else's message must not read as the bot's reply. */}
+        {!isBot && showSender && (
+          <p className="mb-1 px-1 text-[12px] font-semibold text-ink-700">
+            {/* The local person is stored as "You", which is wrong on anyone else's screen. */}
+            {message.sender.userId === LOCAL_VIEWER.userId ? 'Owner' : message.sender.nickname}
+          </p>
+        )}
         {body}
         {message.provenance && <ProvenanceNote provenance={message.provenance} />}
         {screens.length > 0 && <ScreenStrip screens={screens} onOpen={onOpenScreen ?? (() => {})} />}

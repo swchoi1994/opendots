@@ -6,7 +6,7 @@ import { after, test, type TestContext } from 'node:test'
 import { EMPTY_ANSWER, loadTurnContext, runBotTurn, VISITOR_RESTRICTED_TOOLS, type TurnEvent } from './run-bot-turn'
 import type { BotEvent, BotRunInput, runBot } from '../brain'
 import type { ScreenCapture } from '../tools/browser-tools'
-import { memoryRepository } from '../../repository/memory-store'
+import { createMemoryRepository, memoryRepository } from '../../repository/memory-store'
 import { DEFAULT_ASSISTANT } from '../../domain/assistant'
 
 // Seeded bots use the `default` model id. Pin what it resolves to so no test
@@ -398,4 +398,24 @@ test('a session is resumed only by the provider that created it', async (t) => {
     'a fresh session replays memory instead of skipping it',
   )
   assert.deepEqual(await memoryRepository.getBotSession(url), { sessionId: 'claude-sess', provider: 'anthropic' })
+})
+
+test("in a team workspace the bot reads each person's name in the transcript, and its reply stays in that workspace", async () => {
+  const alpha = { workspaceId: 'org_alpha', actor: { userId: 'user_alice', name: 'Alice' } }
+  const alice = createMemoryRepository(alpha)
+  const bob = createMemoryRepository({ workspaceId: 'org_alpha', actor: { userId: 'user_bob', name: 'Bob' } })
+  const channel = await alice.createChannel({ name: 'Team Desk', assistant: { ...DEFAULT_ASSISTANT, tools: ['channel_history'] } })
+  await alice.sendMessage(channel.channelUrl, 'Can we ship Friday?')
+  await bob.sendMessage(channel.channelUrl, 'Only if QA signs off.')
+
+  const ctx = await loadTurnContext(channel.channelUrl, 'user_message', bob.scope)
+  assert.match(ctx.transcript, /^Alice: Can we ship Friday\?$/m)
+  assert.match(ctx.transcript, /^Bob: Only if QA signs off\.$/m)
+  assert.equal(ctx.question, 'Only if QA signs off.')
+  assert.deepEqual(ctx.scope, bob.scope)
+
+  await assert.rejects(loadTurnContext(channel.channelUrl), /No channel/, 'the local workspace cannot run a team bot')
+  await collect(runBotTurn(ctx))
+  const thread = (await alice.listMessages(channel.channelUrl))!
+  assert.ok(thread.at(-1)!.message.sender.userId.startsWith('bot_'), 'the reply landed in the team channel')
 })

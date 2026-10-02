@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { BotAvatar } from './BotAvatar'
 import { CloseIcon, TrashIcon } from './icons'
+import { useViewer } from './ViewerContext'
+import { canToggleTool, hostGrantRefusal } from '@/lib/auth/viewer'
+import type { ClientViewer } from './ViewerContext'
 import {
   DEFAULT_ASSISTANT,
   DEFAULT_GUARDRAILS,
@@ -20,7 +23,8 @@ import type { Skill } from '@/lib/domain/skill'
 interface NewBotDialogProps {
   open: boolean
   onClose: () => void
-  onCreate: (name: string, assistant: AssistantConfig) => Promise<void>
+  /** Resolves to why creation failed, or null once the bot exists. */
+  onCreate: (name: string, assistant: AssistantConfig) => Promise<string | null>
 }
 
 /** Shared with `BotPanel.tsx`, which imports it from here. */
@@ -134,17 +138,24 @@ export function ModelSelect({
   )
 }
 
+/** The tools a new bot starts with: the defaults this person may grant (host-reaching ones need an operator). */
+function startingTools(viewer: ClientViewer): ToolName[] {
+  return DEFAULT_ASSISTANT.tools.filter((tool) => canToggleTool(viewer, tool, false))
+}
+
 /**
  * Bot creation: a bot is configured up front with its name, avatar, the model
  * that answers, the role prompt that shapes it, and which tools it may use.
  */
 export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
+  const viewer = useViewer()
+  const { role } = viewer
   const [name, setName] = useState('')
   const [avatar, setAvatar] = useState<BotAvatarModel>(avatarFromName(''))
   const [avatarTouched, setAvatarTouched] = useState(false)
   const [model, setModel] = useState(DEFAULT_ASSISTANT.model)
   const [systemMessage, setSystemMessage] = useState(DEFAULT_ASSISTANT.systemMessage)
-  const [tools, setTools] = useState<ToolName[]>(DEFAULT_ASSISTANT.tools)
+  const [tools, setTools] = useState<ToolName[]>(() => startingTools(viewer))
   const [memoryEnabled, setMemoryEnabled] = useState(DEFAULT_MEMORY.enabled)
   const [memoryWindow, setMemoryWindow] = useState(DEFAULT_MEMORY.windowMessages)
   const [guardrailsEnabled, setGuardrailsEnabled] = useState(DEFAULT_GUARDRAILS.enabled)
@@ -152,6 +163,7 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [createError, setCreateError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   function handleNameChange(next: string) {
@@ -218,7 +230,9 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
 
   async function removeSkill(skillId: string) {
     setSkills((current) => current.filter((skill) => skill.id !== skillId))
-    // Best-effort cleanup; the bot simply will not reference it.
+    // Best-effort cleanup; the bot simply will not reference it. Deleting a
+    // workspace document is for admins, so a member's upload just stays put.
+    if (role !== 'admin') return
     await fetch(`/api/skills/${skillId}`, { method: 'DELETE' }).catch(() => undefined)
   }
 
@@ -228,7 +242,7 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
     setAvatarTouched(false)
     setModel(DEFAULT_ASSISTANT.model)
     setSystemMessage(DEFAULT_ASSISTANT.systemMessage)
-    setTools(DEFAULT_ASSISTANT.tools)
+    setTools(startingTools(viewer))
     setMemoryEnabled(DEFAULT_MEMORY.enabled)
     setMemoryWindow(DEFAULT_MEMORY.windowMessages)
     setGuardrailsEnabled(DEFAULT_GUARDRAILS.enabled)
@@ -243,7 +257,8 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
 
     setIsSubmitting(true)
     try {
-      await onCreate(name.trim(), {
+      setCreateError(null)
+      const failure = await onCreate(name.trim(), {
         model: resolvedModel,
         name: name.trim(),
         avatar,
@@ -254,6 +269,10 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
         skillIds: skills.map((skill) => skill.id),
         browser: DEFAULT_ASSISTANT.browser,
       })
+      if (failure) {
+        setCreateError(failure)
+        return
+      }
       resetState()
       onClose()
     } finally {
@@ -339,33 +358,39 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
 
             <fieldset className="flex flex-col gap-1.5">
               <legend className="mb-1 text-[12px] font-semibold text-ink-700">Tools</legend>
-              {TOOL_CATALOG.map((tool) => (
-                <label
-                  key={tool.id}
-                  className={`flex items-start gap-2.5 rounded-lg border border-line px-3 py-2 ${tool.available ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={tools.includes(tool.id)}
-                    disabled={!tool.available}
-                    onChange={() => toggleTool(tool.id)}
-                    className="mt-0.5 accent-ink-900"
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1.5">
-                      <span className="block text-[13px] text-ink-900">{tool.label}</span>
-                      {!tool.available && (
-                        <span className="rounded-full bg-surface px-1.5 py-0.5 text-[10px] font-medium text-ink-500">
-                          coming soon
-                        </span>
-                      )}
+              {TOOL_CATALOG.map((tool) => {
+                // A new bot has nothing yet, so every tool it starts with is one being granted.
+                const allowed = canToggleTool(viewer, tool.id, false)
+                const enabled = tool.available && allowed
+                return (
+                  <label
+                    key={tool.id}
+                    title={allowed ? undefined : `${hostGrantRefusal(viewer)} can turn this on`}
+                    className={`flex items-start gap-2.5 rounded-lg border border-line px-3 py-2 ${enabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={tools.includes(tool.id)}
+                      disabled={!enabled}
+                      onChange={() => toggleTool(tool.id)}
+                      className="mt-0.5 accent-ink-900"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5">
+                        <span className="block text-[13px] text-ink-900">{tool.label}</span>
+                        {!tool.available && (
+                          <span className="rounded-full bg-surface px-1.5 py-0.5 text-[10px] font-medium text-ink-500">
+                            coming soon
+                          </span>
+                        )}
+                      </span>
+                      <span className="block text-[11px] leading-snug text-ink-500">
+                        {tool.description}
+                      </span>
                     </span>
-                    <span className="block text-[11px] leading-snug text-ink-500">
-                      {tool.description}
-                    </span>
-                  </span>
-                </label>
-              ))}
+                  </label>
+                )
+              })}
               {shellBrowserWarning(tools) && (
                 <p role="alert" className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
                   {shellBrowserWarning(tools)}
@@ -482,6 +507,13 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
                 </ul>
               )}
             </fieldset>
+
+            {createError && (
+              // The server's reason, e.g. that only admins may turn a tool on; the form stays as typed.
+              <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
+                {createError}
+              </p>
+            )}
 
             <div className="flex justify-end gap-2 pt-1">
               <button

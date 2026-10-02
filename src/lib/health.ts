@@ -15,7 +15,7 @@ import { describeStore, getRepository } from './repository'
  */
 
 export interface HealthDeps {
-  /** Test seam; defaults to the configured repository. */
+  /** The viewer's workspace listing; defaults to the local workspace's. */
   listChannels?: () => Promise<ChannelSummary[]>
   /** Test seam; defaults to asking Ollama and checking ANTHROPIC_API_KEY. */
   buildModelOptions?: typeof catalogOptions
@@ -62,5 +62,22 @@ export async function buildHealth(
       store: { ...describeStore(), ...(storeError ? { error: storeError } : {}) },
       advice,
     },
+  }
+}
+
+/**
+ * For a signed-out request in Clerk mode: whether the store answers, for a
+ * load balancer or a container healthcheck, and nothing about the setup. The
+ * probe reads document ids rather than listing channels, because a listing
+ * would seed starter bots into a workspace nobody is using.
+ */
+export async function buildBriefHealth(
+  probe: () => Promise<unknown> = () => getRepository().listSkillIds(),
+): Promise<{ httpStatus: number; body: { status: string; service: string } }> {
+  try {
+    await probe()
+    return { httpStatus: 200, body: { status: 'ok', service: 'opendots' } }
+  } catch {
+    return { httpStatus: 503, body: { status: 'degraded', service: 'opendots' } }
   }
 }

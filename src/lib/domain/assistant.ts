@@ -20,6 +20,13 @@ export interface ToolDescriptor {
   available: boolean
 }
 
+/**
+ * Tools that reach the server machine itself: its files, a shell, packages it
+ * installs, and a persistent logged-in browser. Share-link visitors never get
+ * them, and in a team workspace only admins may grant them.
+ */
+export const HOST_TOOLS: readonly ToolName[] = ['files', 'shell', 'skills', 'web_browser']
+
 export const TOOL_CATALOG: ToolDescriptor[] = [
   {
     id: 'rag_search',

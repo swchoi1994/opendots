@@ -52,8 +52,10 @@ COPY --from=build --chown=nextjs:nodejs /app/db ./db
 
 # OPENDOTS_DATA_DIR: bot workspaces and the bots' own configuration live
 # outside the app tree so a volume can hold them. Created and chowned here
-# because nextjs cannot mkdir under /.
+# because nextjs cannot mkdir under /. The default points there too, so a
+# plain `docker run` works without compose (the app tree is not writable).
 RUN mkdir -p /data && chown nextjs:nodejs /data
+ENV OPENDOTS_DATA_DIR=/data
 
 USER nextjs
 EXPOSE 3000

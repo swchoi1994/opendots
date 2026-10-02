@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ChannelAvatar } from './Avatar'
 import { MessageInput } from './MessageInput'
 import { MessageThread } from './MessageThread'
+import { ViewerProvider, visitorViewer } from './ViewerContext'
 import { modelBadge } from '@/lib/domain/models'
 import type { ChannelSummary, MessageWithReceipt } from '@/lib/domain/types'
 
@@ -119,61 +120,64 @@ export function DeployedChat({ channel, deploymentId, allowPosting }: DeployedCh
   )
 
   return (
-    <main className="flex h-screen w-full flex-col overflow-hidden bg-white">
-      <header className="flex h-16 shrink-0 items-center gap-3 border-b border-line px-6">
-        <span aria-hidden="true">
-          <ChannelAvatar channel={channel} size={36} />
-        </span>
-        <div className="min-w-0">
-          <h1 className="truncate text-[17px] font-bold text-ink-900">{channel.name}</h1>
-          {channel.assistant && (
-            <p className="truncate text-[11px] text-ink-500">
-              {modelBadge(channel.assistant.model)}
-              {channel.assistant.skillIds.length > 0 &&
-                ` · ${channel.assistant.skillIds.length} skill(s)`}
-            </p>
-          )}
-        </div>
-        <span className="ml-auto shrink-0 rounded-full bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700">
-          Deployed
-        </span>
-      </header>
+    // A visitor's own messages are the ones sent as this link's visitor.
+    <ViewerProvider value={visitorViewer(deploymentId)}>
+      <main className="flex h-screen w-full flex-col overflow-hidden bg-white">
+        <header className="flex h-16 shrink-0 items-center gap-3 border-b border-line px-6">
+          <span aria-hidden="true">
+            <ChannelAvatar channel={channel} size={36} />
+          </span>
+          <div className="min-w-0">
+            <h1 className="truncate text-[17px] font-bold text-ink-900">{channel.name}</h1>
+            {channel.assistant && (
+              <p className="truncate text-[11px] text-ink-500">
+                {modelBadge(channel.assistant.model)}
+                {channel.assistant.skillIds.length > 0 &&
+                  ` · ${channel.assistant.skillIds.length} skill(s)`}
+              </p>
+            )}
+          </div>
+          <span className="ml-auto shrink-0 rounded-full bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700">
+            Deployed
+          </span>
+        </header>
 
-      {error && (
-        <p role="alert" className="border-b border-line bg-rose-50 px-6 py-2 text-[13px] text-rose-700">
-          {error}
-        </p>
-      )}
+        {error && (
+          <p role="alert" className="border-b border-line bg-rose-50 px-6 py-2 text-[13px] text-rose-700">
+            {error}
+          </p>
+        )}
 
-      <MessageThread
-        messages={messages}
-        isLoading={isLoading}
-        responding={
-          responding
-            ? {
-                channelUrl: channel.channelUrl,
-                text: responding.text,
-                provenance: null,
-                activity: null,
-                installedSkills: [],
-                screens: [],
-              }
-            : null
-        }
-      />
+        <MessageThread
+          messages={messages}
+          isLoading={isLoading}
+          responding={
+            responding
+              ? {
+                  channelUrl: channel.channelUrl,
+                  text: responding.text,
+                  provenance: null,
+                  activity: null,
+                  installedSkills: [],
+                  screens: [],
+                }
+              : null
+          }
+        />
 
-      <MessageInput
-        disabled={channel.isFrozen || !allowPosting}
-        isSending={isSending}
-        onSend={sendMessage}
-        placeholder={
-          !allowPosting
-            ? 'This conversation is read-only'
-            : channel.isFrozen
-              ? 'This conversation is frozen'
-              : 'Enter message'
-        }
-      />
-    </main>
+        <MessageInput
+          disabled={channel.isFrozen || !allowPosting}
+          isSending={isSending}
+          onSend={sendMessage}
+          placeholder={
+            !allowPosting
+              ? 'This conversation is read-only'
+              : channel.isFrozen
+                ? 'This conversation is frozen'
+                : 'Enter message'
+          }
+        />
+      </main>
+    </ViewerProvider>
   )
 }

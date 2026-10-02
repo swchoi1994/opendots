@@ -1,4 +1,6 @@
-import { NextResponse, type NextRequest } from 'next/server'
+import { clerkMiddleware } from '@clerk/nextjs/server'
+import { NextResponse, type NextFetchEvent, type NextRequest } from 'next/server'
+import { authMode } from './lib/auth/viewer'
 import { allowedHostsFrom, checkRequest } from './lib/request-guard'
 
 /**
@@ -7,7 +9,7 @@ import { allowedHostsFrom, checkRequest } from './lib/request-guard'
  * cross-site API writes. Build assets are skipped: they are the same for
  * everyone and carry no data.
  */
-export function proxy(request: NextRequest) {
+export function guard(request: NextRequest): NextResponse {
   const verdict = checkRequest(
     {
       method: request.method,
@@ -22,6 +24,27 @@ export function proxy(request: NextRequest) {
   return NextResponse.next()
 }
 
+/*
+ * With sign-in on, the guard runs inside Clerk's middleware, which only makes
+ * auth() available: every route and page decides for itself who may call it,
+ * as Clerk recommends. Clerk's middleware needs the keys, so local mode runs
+ * the guard alone. Building it reads no keys; they are read per request.
+ */
+const guardWithClerk = clerkMiddleware((_auth, request) => guard(request), {
+  // OpenDots's own pages, so redirectToSignIn() never sends anyone to Clerk's hosted portal.
+  signInUrl: '/sign-in',
+  signUpUrl: '/sign-up',
+})
+
+export function chooseProxy(mode: 'clerk' | 'local') {
+  return mode === 'clerk' ? guardWithClerk : guard
+}
+
+export function proxy(request: NextRequest, event: NextFetchEvent) {
+  return chooseProxy(authMode())(request, event)
+}
+
 export const config = {
+  // Everything but build assets, which includes Clerk's own `/__clerk/*` routes.
   matcher: ['/((?!_next/static|_next/image).*)'],
 }

@@ -26,7 +26,7 @@ test('baseEnv keeps the base allowlist and NO_COLOR, and drops everything else',
     assert.ok(env[key], `${key} must survive baseEnv`)
   }
   assert.equal(env.NO_COLOR, '1')
-  for (const secret of ['DATABASE_URL', 'DEPLOYMENT_SESSION_SECRET', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']) {
+  for (const secret of ['DATABASE_URL', 'DEPLOYMENT_SESSION_SECRET', 'CLERK_SECRET_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']) {
     assert.equal(env[secret], undefined, `${secret} must not reach a plain subprocess`)
   }
 })
@@ -54,5 +54,6 @@ test('an Ollama run points the CLI at Ollama and never carries the operator key'
   assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'qwq:latest')
   assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1')
   assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined)
+  assert.equal(env.CLERK_SECRET_KEY, undefined)
   assert.equal(env.PATH, '/usr/bin')
 })

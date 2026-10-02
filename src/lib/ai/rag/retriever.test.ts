@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ChatRepository } from '../../repository/chat-repository'
-import { memoryRepository } from '../../repository/memory-store'
+import { createMemoryRepository, memoryRepository } from '../../repository/memory-store'
 import { getAiConfig } from '../config'
 import { getRetriever } from './retriever'
 
@@ -34,6 +34,7 @@ test('getRetriever reads skills through the injected repository, not the memory 
     uploadedAt: Date.now(),
   }
   const repo = fakeRepository({
+    scope: { workspaceId: 'ws_fake', actor: { userId: 'user_fake', name: 'Fake' } },
     listSkills: async () => [skill],
     listSkillIds: async () => [skill.id],
   })
@@ -70,4 +71,35 @@ test('getRetriever finds an uploaded skill via the memory repository, and forget
     !foundAfter.some((r) => r.source === `skill/${created.fileName}`),
     'expected the deleted skill to no longer be retrievable',
   )
+})
+
+test("knowledge search in one workspace never finds another workspace's document", async () => {
+  const alpha = createMemoryRepository({ workspaceId: 'org_alpha', actor: { userId: 'user_a', name: 'A' } })
+  const beta = createMemoryRepository({ workspaceId: 'org_beta', actor: { userId: 'user_b', name: 'B' } })
+  const created = await alpha.createSkill({
+    fileName: 'alpha-secret.md',
+    content: 'The alpha team rotates the zeppelin hangar keys every fortnight.',
+  })
+  const fromAlpha = await (await getRetriever(getAiConfig(), alpha)).retrieve('zeppelin hangar keys')
+  const fromBeta = await (await getRetriever(getAiConfig(), beta)).retrieve('zeppelin hangar keys')
+  assert.ok(fromAlpha.some((r) => r.source === `skill/${created.fileName}`))
+  assert.ok(!fromBeta.some((r) => r.source === `skill/${created.fileName}`))
+})
+
+test('a document uploaded and deleted between the id check and the index build never stays searchable', async () => {
+  const doc = (id: string, body: string) => ({ id, name: id, description: id, body, fileName: `${id}.md`, uploadedAt: 0 })
+  let ids = ['race_a']
+  let docs = [doc('race_a', 'The nightly ledger closes at nine.'), doc('race_b', 'The quartz turbine hums in hangar seven.')]
+  const repo = fakeRepository({
+    scope: { workspaceId: 'ws_race', actor: { userId: 'user_r', name: 'R' } },
+    listSkillIds: async () => ids,
+    listSkills: async () => docs,
+  })
+  // First call: race_b arrives after the ids were read, so it is indexed.
+  await getRetriever(getAiConfig(), repo)
+  // It is deleted again; the ids now look exactly like the first read did.
+  docs = [doc('race_a', 'The nightly ledger closes at nine.')]
+  ids = ['race_a']
+  const after = await (await getRetriever(getAiConfig(), repo)).retrieve('quartz turbine hangar')
+  assert.ok(!after.some((r) => r.source === 'skill/race_b.md'), 'the deleted document must not be served from a stale index')
 })

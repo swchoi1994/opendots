@@ -11,7 +11,7 @@ The code starts from EigenBots (the `bots/` app in the private eigenoffice repo)
 
 ## Release gate
 
-The GitHub repository (`swchoi1994/opendots`) stays **private** until all six sub-projects below have shipped and been verified. Making it public is the owner's call, not part of any sub-project.
+The GitHub repository (`swchoi1994/opendots`) was planned to stay private until all six sub-projects shipped. On 2026-10-02 the owner chose to release A and B as v0.1.0 instead; the rest follow in later releases. Making it public is the owner's call, not part of any sub-project.
 
 ## Decisions that apply to every sub-project
 

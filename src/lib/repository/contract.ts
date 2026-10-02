@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { HOST_TOOLS } from '../domain/assistant'
 import { ROSTER } from '../domain/roster'
 import { isUserMessage } from '../domain/types'
-import type { ChatRepository } from './chat-repository'
+import { LOCAL_SCOPE, type ChatRepository, type Scope } from './chat-repository'
 
 /**
  * The behaviour every ChatRepository must share. Registered once per store
  * (memory-store.test.ts, postgres-store.test.ts) so the embedded database is
  * held to exactly what the in-memory store already promises.
  */
-export function repositoryContract(label: string, getRepo: () => Promise<ChatRepository>): void {
+export function repositoryContract(label: string, getRepo: (scope?: Scope) => Promise<ChatRepository>): void {
   test(`${label}: seed is the roster, each bot with one intro message from itself`, async () => {
     const repo = await getRepo()
     const channels = await repo.listChannels()
@@ -114,5 +115,154 @@ export function repositoryContract(label: string, getRepo: () => Promise<ChatRep
     await repo.appendScreen({ ...base, turnId: 't1', step: 2 })
     const listed = await repo.listScreens(created.channelUrl)
     assert.deepEqual(listed.map((s) => `${s.turnId}-${s.step}`), ['t2-1', 't1-1', 't1-2'])
+  })
+
+  const ALICE_IN_ALPHA: Scope = { workspaceId: 'org_alpha', actor: { userId: 'user_alice', name: 'Alice' } }
+  const BOB_IN_ALPHA: Scope = { workspaceId: 'org_alpha', actor: { userId: 'user_bob', name: 'Bob' } }
+  const BOB_IN_BETA: Scope = { workspaceId: 'org_beta', actor: { userId: 'user_bob', name: 'Bob' } }
+  const template = async () => (await (await getRepo(LOCAL_SCOPE)).listChannels())[0]!.assistant!
+
+  test(`${label}: each workspace is seeded with its own nine bots, at urls no other workspace uses`, async () => {
+    const alpha = await (await getRepo(ALICE_IN_ALPHA)).listChannels()
+    const beta = await (await getRepo(BOB_IN_BETA)).listChannels()
+    assert.equal(alpha.length, ROSTER.length)
+    assert.equal(beta.length, ROSTER.length)
+    assert.ok(alpha.every((c) => /^bot_[a-z-]+_[0-9a-f]{8}$/.test(c.channelUrl)), 'seed urls outside local carry a workspace suffix')
+    const alphaUrls = new Set(alpha.map((c) => c.channelUrl))
+    assert.ok(beta.every((c) => !alphaUrls.has(c.channelUrl)))
+    assert.equal((await (await getRepo(BOB_IN_ALPHA)).listChannels()).length, ROSTER.length, 'a second person in the same workspace sees the same bots')
+  })
+
+  test(`${label}: starter bots have host-reaching tools only in local mode and an operator's own workspace`, async () => {
+    const hostTools = (channels: { assistant: { tools: string[] } | null }[]) =>
+      channels.flatMap((c) => c.assistant?.tools ?? []).filter((tool) => (HOST_TOOLS as readonly string[]).includes(tool))
+    const team = await (await getRepo({ workspaceId: 'org_fresh', actor: { userId: 'user_max', name: 'Max' } })).listChannels()
+    assert.deepEqual(hostTools(team), [])
+    const operator = await (await getRepo({ workspaceId: 'user_op', actor: { userId: 'user_op', name: 'Op', operator: true } })).listChannels()
+    assert.ok(hostTools(operator).length > 0, "an operator's own workspace gets the defaults, as in local mode")
+    const stranger = await (await getRepo({ workspaceId: 'user_anyone', actor: { userId: 'user_anyone', name: 'Anyone' } })).listChannels()
+    assert.deepEqual(hostTools(stranger), [], "anyone else's personal workspace gets none: nobody there may grant them")
+  })
+
+  test(`${label}: a workspace can neither see nor touch another workspace's channels`, async () => {
+    const alpha = await getRepo(ALICE_IN_ALPHA)
+    const beta = await getRepo(BOB_IN_BETA)
+    const tpl = await template()
+    const { channelUrl } = await alpha.createChannel({ name: 'Alpha Only', assistant: tpl })
+    assert.ok(!(await beta.listChannels()).some((c) => c.channelUrl === channelUrl))
+    assert.equal(await beta.getChannel(channelUrl), null)
+    assert.equal(await beta.listMessages(channelUrl), null)
+    assert.equal(await beta.getBotSession(channelUrl), null)
+    assert.deepEqual(await beta.listScreens(channelUrl), [])
+    // The methods that do nothing on a miss must do nothing here too.
+    await alpha.setBotSession(channelUrl, 'alpha-session', 'ollama')
+    const screen = await alpha.appendScreen({
+      channelUrl, turnId: 't1', step: 1, action: 'open', target: null, intent: null,
+      url: 'https://example.com', title: 'Example', imagePath: '/tmp/alpha.jpg', annotations: [], flagged: false,
+    })
+    await beta.clearBotSession(channelUrl)
+    await beta.attachScreensToMessage(channelUrl, 't1', 1)
+    assert.equal(await beta.getScreenImagePath(channelUrl, screen.screenId), null)
+    assert.equal((await alpha.getBotSession(channelUrl))?.sessionId, 'alpha-session', "beta can't clear alpha's session")
+    assert.equal((await alpha.listScreens(channelUrl))[0]?.messageId, null, "beta can't attach alpha's screens")
+    const attempts: (() => Promise<unknown>)[] = [
+      () => beta.sendMessage(channelUrl, 'hi'),
+      () => beta.appendAssistantMessage(channelUrl, 'hi'),
+      () => beta.markRead(channelUrl),
+      () => beta.updateAssistant(channelUrl, tpl),
+      () => beta.deployChannel(channelUrl),
+      () => beta.setBotSession(channelUrl, 's', 'ollama'),
+      () => beta.deleteChannel(channelUrl),
+    ]
+    for (const attempt of attempts) {
+      await assert.rejects(attempt(), (error: unknown) => (error as { code?: string }).code === 'CHANNEL_NOT_FOUND')
+    }
+    assert.ok(await alpha.getChannel(channelUrl), 'its own workspace still has it')
+  })
+
+  test(`${label}: documents belong to a workspace too`, async () => {
+    const alpha = await getRepo(ALICE_IN_ALPHA)
+    const beta = await getRepo(BOB_IN_BETA)
+    const skill = await alpha.createSkill({ fileName: 'alpha-only.md', content: 'A document only Alpha may see.' })
+    assert.ok((await alpha.listSkillIds()).includes(skill.id))
+    assert.ok(!(await beta.listSkillIds()).includes(skill.id))
+    assert.ok(!(await beta.listSkills()).some((s) => s.id === skill.id))
+    await assert.rejects(beta.deleteSkill(skill.id), (error: unknown) => (error as { code?: string }).code === 'SKILL_NOT_FOUND')
+  })
+
+  test(`${label}: a message is sent as the scope's person, and unread counts are per person`, async () => {
+    const alice = await getRepo(ALICE_IN_ALPHA)
+    const bob = await getRepo(BOB_IN_ALPHA)
+    const { channelUrl } = await alice.createChannel({ name: 'Shared', assistant: await template() })
+    const sent = await alice.sendMessage(channelUrl, 'hello team')
+    assert.equal(sent.sender.userId, 'user_alice')
+    assert.equal(sent.sender.nickname, 'Alice')
+    assert.equal((await bob.listMessages(channelUrl))!.at(-1)!.message.sender.nickname, 'Alice')
+    const unreadFor = async (repo: ChatRepository) => (await repo.listChannels()).find((c) => c.channelUrl === channelUrl)!.unreadMessageCount
+    assert.equal(await unreadFor(alice), 0, 'sending is reading')
+    assert.equal(await unreadFor(bob), 1, 'Bob has not read it')
+    await bob.markRead(channelUrl)
+    assert.equal(await unreadFor(bob), 0)
+  })
+
+  test(`${label}: a share link knows its workspace, and anyone may look it up by id`, async () => {
+    const alpha = await getRepo(ALICE_IN_ALPHA)
+    const { channelUrl } = await alpha.createChannel({ name: 'Shared Out', assistant: await template() })
+    const deployment = await alpha.deployChannel(channelUrl)
+    assert.equal(deployment.workspaceId, 'org_alpha')
+    const found = await (await getRepo(BOB_IN_BETA)).getDeployment(deployment.id)
+    assert.equal(found?.channelUrl, channelUrl)
+    assert.equal(found?.workspaceId, 'org_alpha')
+  })
+
+  test(`${label}: deleting everything deletes only the scope's workspace`, async () => {
+    const alpha = await getRepo(ALICE_IN_ALPHA)
+    const beta = await getRepo(BOB_IN_BETA)
+    const { channelUrl } = await alpha.createChannel({ name: 'Survivor', assistant: await template() })
+    await beta.listChannels()
+    assert.ok((await beta.deleteAllChannels()) > 0)
+    assert.ok(await alpha.getChannel(channelUrl))
+  })
+
+  // Last: it moves the local workspace's data away.
+  test(`${label}: the first personal sign-in claims the local data, exactly once`, async () => {
+    const local = await getRepo(LOCAL_SCOPE)
+    const tpl = await template()
+    const localUrl = (await local.listChannels())[0]!.channelUrl
+    const skill = await local.createSkill({ fileName: 'before-sign-in.md', content: 'A document made before anyone signed in.' })
+    const aliceHome: Scope = { workspaceId: 'user_alice', actor: { userId: 'user_alice', name: 'Alice' } }
+    const alice = await getRepo(aliceHome)
+    // Signed in before being listed as an operator: a starter set exists, and one of them was used.
+    const touched = (await alice.listChannels())[0]!.channelUrl
+    await alice.sendMessage(touched, 'kept, because it was used')
+    await local.sendMessage(localUrl, 'written before sign-in')
+    const localUrls = (await local.listChannels()).map((c) => c.channelUrl).sort()
+    const localSkills = (await local.listSkillIds()).sort()
+    assert.equal(await alice.claimLocalData({ userId: 'user_alice', name: 'Alice' }), 'claimed')
+    const claimed = await alice.listChannels()
+    assert.deepEqual(
+      claimed.map((c) => c.channelUrl).sort(),
+      [...localUrls, touched].sort(),
+      'every local bot moved; untouched starter bots gave way, the used one stayed',
+    )
+    assert.ok(localUrls.includes(localUrl))
+    assert.deepEqual((await alice.listSkillIds()).sort(), localSkills, 'every local document moved')
+    assert.ok(localSkills.includes(skill.id))
+    const before = (await alice.listMessages(localUrl))!.find((m) => isUserMessage(m.message) && m.message.message === 'written before sign-in')
+    assert.equal(before?.message.sender.userId, 'user_alice', 'what the local person sent is now the claimant\'s')
+    assert.equal(before?.message.sender.nickname, 'Alice', 'under their name, which is what a bot\'s transcript reads')
+    assert.deepEqual(await local.listChannels(), [], 'nothing is left in local')
+    assert.deepEqual(await local.listSkillIds(), [])
+    assert.equal(
+      claimed.reduce((sum, c) => sum + c.unreadMessageCount, 0),
+      0,
+      "what the local person had read, the claimant has read",
+    )
+
+    const bob = await getRepo({ workspaceId: 'user_bob', actor: { userId: 'user_bob', name: 'Bob' } })
+    assert.equal(await bob.claimLocalData({ userId: 'user_bob', name: 'Bob' }), 'already', 'a second person gets nothing')
+    const later = await local.createChannel({ name: 'Made Later', assistant: tpl })
+    assert.equal(await bob.claimLocalData({ userId: 'user_bob', name: 'Bob' }), 'already')
+    assert.ok(await local.getChannel(later.channelUrl), 'data created after the claim stays local')
   })
 }

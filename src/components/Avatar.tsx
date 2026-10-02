@@ -1,4 +1,4 @@
-import { CURRENT_USER_ID, type ChannelSummary, type User } from '@/lib/domain/types'
+import type { ChannelSummary, User } from '@/lib/domain/types'
 import { initials } from '@/lib/format'
 
 /*
@@ -36,10 +36,14 @@ export function Avatar({ user, size = 40 }: { user: User; size?: number }) {
   )
 }
 
-/** Members other than the signed-in user — who the channel is *with*. */
+/**
+ * Who the channel is *with*: its bot. Whoever is looking is the other member,
+ * and that is a different person per viewer, so the bot is picked out by its
+ * id rather than by excluding "me".
+ */
 export function counterparts(channel: ChannelSummary): User[] {
-  const others = channel.members.filter((member) => member.userId !== CURRENT_USER_ID)
-  return others.length > 0 ? others : channel.members
+  const bots = channel.members.filter((member) => member.userId.startsWith('bot_'))
+  return bots.length > 0 ? bots : channel.members
 }
 
 /**
