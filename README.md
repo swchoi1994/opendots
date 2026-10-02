@@ -160,7 +160,6 @@ The planner decides retrieval, the system prompt and tool grants without calling
 - Captured browser frames accumulate until their bot is deleted.
 - Document search is lexical, so it misses paraphrases.
 - Local models must support tool calling, and answer quality depends on the model.
-- `pnpm test` sets `DATA_STORE` with a POSIX shell prefix, so on Windows run it from WSL or Git Bash.
 
 ## License
 

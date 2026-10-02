@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
@@ -48,9 +48,11 @@ test('a stale lock left by a dead process is reclaimed', (t) => {
   release()
 })
 
-test('an unreadable lock file is treated as stale', (t) => {
+test('an unreadable lock file is treated as stale once it is old enough', (t) => {
   const dir = dataDirFor(t)
   writeFileSync(lockPathFor(dir), 'garbage')
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(lockPathFor(dir), old, old)
   const release = lockDataDir(dir)
   assert.equal(readFileSync(lockPathFor(dir), 'utf8').trim(), String(process.pid))
   release()
@@ -115,4 +117,18 @@ test('without hard links a live holder is still refused, and a stale one reclaim
   assert.ok(staleFs.calls() >= 1)
   assert.equal(readFileSync(lockPathFor(stale), 'utf8').trim(), String(process.pid))
   release()
+})
+
+test('a brand-new empty or unreadable lock is another starter mid-write, not a stale one', (t) => {
+  // Without hard links the lock is created empty and then written; reclaiming it
+  // in that instant would let two processes open the same database.
+  const empty = dataDirFor(t)
+  writeFileSync(lockPathFor(empty), '')
+  assert.throws(() => lockDataDir(empty), /being opened by another OpenDots process/)
+  assert.equal(readFileSync(lockPathFor(empty), 'utf8'), '', 'the other starter keeps its lock')
+
+  const partial = dataDirFor(t)
+  writeFileSync(lockPathFor(partial), '12')
+  writeFileSync(lockPathFor(partial), 'x')
+  assert.throws(() => lockDataDir(partial), /being opened by another OpenDots process/)
 })

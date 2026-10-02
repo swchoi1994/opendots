@@ -1,4 +1,4 @@
-import { linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { linkSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 /**
@@ -34,6 +34,18 @@ function isAlive(pid: number): boolean {
   }
 }
 
+/** How long an empty or unreadable lock counts as "being written" rather than stale. */
+const FRESH_LOCK_MS = 2_000
+
+function identity(path: string): { ino: number; mtimeMs: number } | null {
+  try {
+    const { ino, mtimeMs } = statSync(path)
+    return { ino, mtimeMs }
+  } catch {
+    return null
+  }
+}
+
 function readHolder(path: string): number | null {
   try {
     const pid = Number.parseInt(readFileSync(path, 'utf8').trim(), 10)
@@ -56,11 +68,10 @@ let exitHookInstalled = false
  * Takes the lock file, or returns false when it already exists. A hard link is
  * preferred (the file appears atomically with its content). File systems
  * without hard links (exFAT, some SMB shares) fail link() with something other
- * than EEXIST; there an exclusive create stands in. It has one gap the link
- * does not: between create and write the file is empty, and a starter racing
- * in that instant reads it as stale. Accepted for this fallback only, since
- * two OpenDots processes starting within the same millisecond on such a file
- * system is far rarer than the plain second-process case the lock exists for.
+ * than EEXIST; there an exclusive create stands in. Between that create and
+ * its write the file is briefly empty, which is why lockDataDir treats an
+ * empty or unreadable lock younger than FRESH_LOCK_MS as another starter
+ * rather than a stale lock, and re-checks the inode before deleting anything.
  */
 function claim(link: typeof linkSync, draft: string, path: string): boolean {
   try {
@@ -99,6 +110,7 @@ export function lockDataDir(dir: string, deps: { link?: typeof linkSync } = {}):
     for (let attempt = 0; ; attempt++) {
       if (claim(link, draft, path)) break
       if (attempt >= 3) throw new Error(`Could not take the lock ${path} after several attempts; another OpenDots process may be starting.`)
+      const seen = identity(path)
       const holder = readHolder(path)
       // Our own pid without our own claim is a pid reused after a restart (a
       // container's pid 1, say): as stale as a dead one.
@@ -108,8 +120,20 @@ export function lockDataDir(dir: string, deps: { link?: typeof linkSync } = {}):
             `stop the other OpenDots process, then try again. If no such process is running, delete ${path}.`,
         )
       }
-      // Re-read right before removing, so a lock another starter just took is left alone.
-      if (readHolder(path) === holder) rmSync(path, { force: true })
+      // No readable pid in a fresh file is a starter between create and write
+      // (the no-hard-link fallback), not a crashed one: leave it alone.
+      if (holder === null && seen !== null && Date.now() - seen.mtimeMs < FRESH_LOCK_MS) {
+        throw new Error(
+          `The embedded database at ${dir} is being opened by another OpenDots process: ` +
+            `wait a moment and try again. If no such process is running, delete ${path}.`,
+        )
+      }
+      // Remove only the very file judged stale: re-check its inode and holder
+      // right before deleting, so a lock another starter just took is left alone.
+      const now = identity(path)
+      if (now !== null && seen !== null && now.ino === seen.ino && readHolder(path) === holder) {
+        rmSync(path, { force: true })
+      }
     }
   } finally {
     rmSync(draft, { force: true })

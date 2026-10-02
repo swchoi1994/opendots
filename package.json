@@ -9,7 +9,7 @@
     "build": "next build",
     "start": "next start -H 127.0.0.1",
     "lint": "eslint",
-    "test": "DATA_STORE=memory tsx --test \"src/**/*.test.ts\"",
+    "test": "tsx --env-file=scripts/test.env --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "eval": "tsx scripts/run-evals.ts",
     "db:init": "tsx scripts/db-init.ts"
