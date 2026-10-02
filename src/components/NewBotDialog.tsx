@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { BotAvatar } from './BotAvatar'
 import { CloseIcon, TrashIcon } from './icons'
 import { useViewer } from './ViewerContext'
-import { canToggleTool, type Role } from '@/lib/auth/viewer'
+import { canToggleTool, hostGrantRefusal } from '@/lib/auth/viewer'
+import type { ClientViewer } from './ViewerContext'
 import {
   DEFAULT_ASSISTANT,
   DEFAULT_GUARDRAILS,
@@ -137,9 +138,9 @@ export function ModelSelect({
   )
 }
 
-/** The tools a new bot starts with: the defaults this person may grant (members can't grant host-reaching ones). */
-function startingTools(role: Role): ToolName[] {
-  return DEFAULT_ASSISTANT.tools.filter((tool) => canToggleTool(role, tool, false))
+/** The tools a new bot starts with: the defaults this person may grant (host-reaching ones need an operator). */
+function startingTools(viewer: ClientViewer): ToolName[] {
+  return DEFAULT_ASSISTANT.tools.filter((tool) => canToggleTool(viewer, tool, false))
 }
 
 /**
@@ -147,13 +148,14 @@ function startingTools(role: Role): ToolName[] {
  * that answers, the role prompt that shapes it, and which tools it may use.
  */
 export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
-  const { role } = useViewer()
+  const viewer = useViewer()
+  const { role } = viewer
   const [name, setName] = useState('')
   const [avatar, setAvatar] = useState<BotAvatarModel>(avatarFromName(''))
   const [avatarTouched, setAvatarTouched] = useState(false)
   const [model, setModel] = useState(DEFAULT_ASSISTANT.model)
   const [systemMessage, setSystemMessage] = useState(DEFAULT_ASSISTANT.systemMessage)
-  const [tools, setTools] = useState<ToolName[]>(() => startingTools(role))
+  const [tools, setTools] = useState<ToolName[]>(() => startingTools(viewer))
   const [memoryEnabled, setMemoryEnabled] = useState(DEFAULT_MEMORY.enabled)
   const [memoryWindow, setMemoryWindow] = useState(DEFAULT_MEMORY.windowMessages)
   const [guardrailsEnabled, setGuardrailsEnabled] = useState(DEFAULT_GUARDRAILS.enabled)
@@ -240,7 +242,7 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
     setAvatarTouched(false)
     setModel(DEFAULT_ASSISTANT.model)
     setSystemMessage(DEFAULT_ASSISTANT.systemMessage)
-    setTools(startingTools(role))
+    setTools(startingTools(viewer))
     setMemoryEnabled(DEFAULT_MEMORY.enabled)
     setMemoryWindow(DEFAULT_MEMORY.windowMessages)
     setGuardrailsEnabled(DEFAULT_GUARDRAILS.enabled)
@@ -358,12 +360,12 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
               <legend className="mb-1 text-[12px] font-semibold text-ink-700">Tools</legend>
               {TOOL_CATALOG.map((tool) => {
                 // A new bot has nothing yet, so every tool it starts with is one being granted.
-                const allowed = canToggleTool(role, tool.id, false)
+                const allowed = canToggleTool(viewer, tool.id, false)
                 const enabled = tool.available && allowed
                 return (
                   <label
                     key={tool.id}
-                    title={allowed ? undefined : 'Only workspace admins can turn this on'}
+                    title={allowed ? undefined : `${hostGrantRefusal(viewer)} can turn this on`}
                     className={`flex items-start gap-2.5 rounded-lg border border-line px-3 py-2 ${enabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
                   >
                     <input

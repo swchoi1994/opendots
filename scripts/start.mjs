@@ -20,11 +20,34 @@ function signInIsOn(env) {
   return Boolean(env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY && env.CLERK_SECRET_KEY)
 }
 
+/** `next start` options that cannot change where it listens or what it exposes; each takes one number. */
+const PASSTHROUGH = new Set(['-p', '--port', '--keepAliveTimeout'])
+
+/**
+ * Only the options above, so nothing on the command line can move the address
+ * (-H in any spelling, a `--` that makes Next drop the rest, --inspect opening
+ * the debugger to the network).
+ */
+function passthroughArgs(argv) {
+  const out = []
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    const [flag, inline] = arg.startsWith('--') ? arg.split(/=(.*)/s) : [arg.slice(0, 2), arg.slice(2) || undefined]
+    if (!PASSTHROUGH.has(flag)) return null
+    const value = inline ?? argv[++i]
+    if (!value || !/^\d+$/.test(value)) return null
+    out.push(flag, value)
+  }
+  return out
+}
+
 /** The `next` arguments for this environment, or why it must not start. */
 export function startArgs(env, argv = []) {
-  // Every spelling Next accepts: -H x, -Hx, --hostname x, --hostname=x.
-  if (argv.some((arg) => arg.startsWith('-H') || arg.startsWith('--hostname'))) {
-    return { error: 'Set the address with OPENDOTS_LISTEN_HOST, not -H: the address is checked before OpenDots starts.' }
+  const extra = passthroughArgs(argv)
+  if (!extra) {
+    return {
+      error: 'pnpm start takes only --port and --keepAliveTimeout. Set the address with OPENDOTS_LISTEN_HOST: it is checked before OpenDots starts.',
+    }
   }
   const host = (env.OPENDOTS_LISTEN_HOST ?? '').trim() || '127.0.0.1'
   if (!isLoopback(host) && !signInIsOn(env)) {
@@ -35,8 +58,7 @@ export function startArgs(env, argv = []) {
         'or leave OPENDOTS_LISTEN_HOST at 127.0.0.1.',
     }
   }
-  // Ours goes last: Next takes the last -H it is given, so nothing before it can override the checked address.
-  return { args: ['start', ...argv, '-H', host] }
+  return { args: ['start', '-H', host, ...extra] }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

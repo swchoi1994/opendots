@@ -25,11 +25,12 @@ export interface CreateSkillInput {
 export interface Scope {
   /** A Clerk organization id, a user's own id for their personal workspace, or `local`. */
   workspaceId: string
-  actor: { userId: string; name: string }
+  /** `operator`: may grant host-reaching tools, so their own starter bots keep them. */
+  actor: { userId: string; name: string; operator?: boolean }
 }
 
 /** Local mode, the tests and the eval: one workspace, one person. Mirrors auth/viewer.ts's LOCAL_VIEWER. */
-export const LOCAL_SCOPE: Scope = { workspaceId: 'local', actor: { userId: 'user_me', name: 'You' } }
+export const LOCAL_SCOPE: Scope = { workspaceId: 'local', actor: { userId: 'user_me', name: 'You', operator: true } }
 
 export interface Deployment {
   /** Opaque 16-hex-character id that appears in the shareable /app/<id> URL. */
@@ -131,10 +132,11 @@ export interface ChatRepository {
 
   /**
    * Instance-wide, whatever this instance's scope: moves every channel and
-   * document still in the `local` workspace into `userId`'s personal workspace,
-   * the first time anyone calls it, and never again.
+   * document still in the `local` workspace into the claimant's personal
+   * workspace, with what the local person sent and read now theirs, the first
+   * time anyone calls it, and never again. Only operators call it.
    */
-  claimLocalData(userId: string): Promise<'claimed' | 'already'>
+  claimLocalData(claimant: { userId: string; name: string }): Promise<'claimed' | 'already'>
 }
 
 /** Thrown for conditions the HTTP layer maps onto specific status codes. */

@@ -6,7 +6,7 @@ import { BotAvatar } from './BotAvatar'
 import { CloseIcon } from './icons'
 import { ScreenPanel } from './ScreenPanel'
 import { useViewer } from './ViewerContext'
-import { canToggleTool } from '@/lib/auth/viewer'
+import { canToggleTool, hostGrantRefusal } from '@/lib/auth/viewer'
 import { readError } from '@/lib/client-errors'
 import {
   DEFAULT_ASSISTANT,
@@ -70,7 +70,8 @@ export function BotPanel({
   onToggleHeaded,
 }: BotPanelProps) {
   const assistant = channel.assistant
-  const { role } = useViewer()
+  const viewer = useViewer()
+  const { role } = viewer
   const [isEditing, setIsEditing] = useState(false)
   const [name, setName] = useState(assistant?.name ?? channel.name)
   const [avatar, setAvatar] = useState<BotAvatarModel>(assistant?.avatar ?? DEFAULT_ASSISTANT.avatar)
@@ -298,12 +299,12 @@ export function BotPanel({
               <legend className="mb-1 text-[12px] font-semibold text-ink-700">Tools</legend>
               {TOOL_CATALOG.map((tool) => {
                 // Measured against the saved bot, as the server does: a member may untick a granted tool and tick it back.
-                const allowed = canToggleTool(role, tool.id, assistant.tools.includes(tool.id))
+                const allowed = canToggleTool(viewer, tool.id, assistant.tools.includes(tool.id))
                 const enabled = tool.available && allowed
                 return (
                   <label
                     key={tool.id}
-                    title={allowed ? undefined : 'Only workspace admins can turn this on'}
+                    title={allowed ? undefined : `${hostGrantRefusal(viewer)} can turn this on`}
                     className={`flex items-center gap-2 text-[12px] ${enabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
                   >
                     <input

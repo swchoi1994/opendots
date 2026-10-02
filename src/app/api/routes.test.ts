@@ -21,7 +21,7 @@ import * as skills from './skills/route'
  * workspace as themselves, and members can't grant host tools or delete.
  */
 
-const KEYS = { NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: 'pk_test_routes', CLERK_SECRET_KEY: 'sk_test_routes' }
+const KEYS = { NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: 'pk_test_routes', CLERK_SECRET_KEY: 'sk_test_routes', OPENDOTS_OPERATORS: 'user_ada' }
 before(() => Object.assign(process.env, KEYS))
 after(() => {
   for (const key of Object.keys(KEYS)) delete process.env[key]
@@ -164,4 +164,20 @@ test("a member's first look at a brand-new team finds starter bots without host-
   assert.equal(bots.length, 9)
   const granted = bots.flatMap((bot) => bot.assistant?.tools ?? []).filter((tool) => ['files', 'shell', 'skills', 'web_browser'].includes(tool))
   assert.deepEqual(granted, [], 'no admin granted them')
+})
+
+test("someone who signed up, alone in their own workspace, still cannot give a bot host access", async () => {
+  as({ userId: 'user_stranger', orgId: null, isOrgAdmin: false, claims: { name: 'Stranger' } })
+  const listed = await json(await channels.GET())
+  const bots = listed.body.channels as { channelUrl: string; assistant: { tools: ToolName[] } | null }[]
+  assert.deepEqual(bots.flatMap((b) => b.assistant?.tools ?? []).filter((t) => ['files', 'shell', 'skills', 'web_browser'].includes(t)), [], 'their starter bots come without host tools')
+  const url = bots[0]!.channelUrl
+  const shell = await json(await channel.PATCH(req(`/api/channels/${url}`, 'PATCH', { assistant: { ...DEFAULT_ASSISTANT, tools: ['rag_search', 'shell'] } }), at({ channelUrl: url })))
+  assert.equal(shell.status, 403)
+  assert.match(String(shell.body.error), /operators/)
+  const created = await json(await channels.POST(req('/api/channels', 'POST', { name: 'Mine', assistant: { ...DEFAULT_ASSISTANT, tools: ['files'] } })))
+  assert.equal(created.status, 403)
+  const window = await browser.PATCH(req(`/api/channels/${url}/browser`, 'PATCH', { headed: true }), at({ channelUrl: url }))
+  assert.equal(window.status, 403)
+  assert.equal((await channel.DELETE(req(`/api/channels/${url}`, 'DELETE'), at({ channelUrl: url }))).status, 200, 'their own workspace is still theirs to tidy')
 })

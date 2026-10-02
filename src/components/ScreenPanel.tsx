@@ -6,6 +6,7 @@ import type { Annotation } from '@/lib/browser/agent-browser'
 import type { Screen, ScreenFrame } from '@/lib/domain/screen'
 import type { ChannelSummary } from '@/lib/domain/types'
 import { useViewer } from './ViewerContext'
+import { canGrantHostTools } from '@/lib/auth/viewer'
 
 interface ScreenPanelProps {
   channel: ChannelSummary
@@ -120,7 +121,7 @@ function Lightbox({ frame, botName, onClose }: { frame: FrameLike; botName: stri
  * toggle for its live session, and every step it has taken so far.
  */
 export function ScreenPanel({ channel, screens, liveScreens, activeScreenId, onSelect, onToggleHeaded }: ScreenPanelProps) {
-  const { role } = useViewer()
+  const viewer = useViewer()
   const botName = channel.assistant?.name ?? channel.name
   const [isToggling, setIsToggling] = useState(false)
   const [toggleError, setToggleError] = useState<string | null>(null)
@@ -213,8 +214,8 @@ export function ScreenPanel({ channel, screens, liveScreens, activeScreenId, onS
         )}
       </section>
 
-      {/* The window opens on the server's screen, so only admins get the switch. */}
-      {channel.assistant && role === 'admin' && (
+      {/* The window opens on the server's screen, so only those who may grant host tools get the switch. */}
+      {channel.assistant && canGrantHostTools(viewer) && (
         <section className="mt-4 border-t border-line pt-3">
           <button
             type="button"

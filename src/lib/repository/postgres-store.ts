@@ -694,7 +694,7 @@ export class PostgresChatRepository implements ChatRepository {
     if (!rowCount) throw SkillNotFound(skillId)
   }
 
-  async claimLocalData(userId: string): Promise<'claimed' | 'already'> {
+  async claimLocalData({ userId, name }: { userId: string; name: string }): Promise<'claimed' | 'already'> {
     return this.db.transaction(async (tx) => {
       // Two first sign-ins at once: the second waits here, then finds the row.
       await tx.query("SELECT pg_advisory_xact_lock(hashtext('opendots_claim'))")
@@ -712,11 +712,11 @@ export class PostgresChatRepository implements ChatRepository {
          ON CONFLICT (channel_url, user_id) DO UPDATE SET read_at = GREATEST(read_receipts.read_at, EXCLUDED.read_at)`,
         [userId, LOCAL_SCOPE.workspaceId, LOCAL_SCOPE.actor.userId],
       )
-      // And what they sent is theirs.
+      // And what they sent is theirs, under their name (a bot's transcript reads it).
       await tx.query(
-        `UPDATE messages SET sender_id = $1
+        `UPDATE messages SET sender_id = $1, sender_name = $4
           WHERE sender_id = $3 AND channel_url IN (SELECT channel_url FROM channels WHERE workspace_id = $2)`,
-        [userId, LOCAL_SCOPE.workspaceId, LOCAL_SCOPE.actor.userId],
+        [userId, LOCAL_SCOPE.workspaceId, LOCAL_SCOPE.actor.userId, name],
       )
       await tx.query('UPDATE channels SET workspace_id = $1 WHERE workspace_id = $2', [userId, LOCAL_SCOPE.workspaceId])
       await tx.query('UPDATE skills SET workspace_id = $1 WHERE workspace_id = $2', [userId, LOCAL_SCOPE.workspaceId])

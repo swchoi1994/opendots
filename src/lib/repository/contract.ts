@@ -133,13 +133,15 @@ export function repositoryContract(label: string, getRepo: (scope?: Scope) => Pr
     assert.equal((await (await getRepo(BOB_IN_ALPHA)).listChannels()).length, ROSTER.length, 'a second person in the same workspace sees the same bots')
   })
 
-  test(`${label}: a team's starter bots have no host-reaching tools until an admin grants them; a personal workspace's keep theirs`, async () => {
+  test(`${label}: starter bots have host-reaching tools only in local mode and an operator's own workspace`, async () => {
     const hostTools = (channels: { assistant: { tools: string[] } | null }[]) =>
       channels.flatMap((c) => c.assistant?.tools ?? []).filter((tool) => (HOST_TOOLS as readonly string[]).includes(tool))
     const team = await (await getRepo({ workspaceId: 'org_fresh', actor: { userId: 'user_max', name: 'Max' } })).listChannels()
     assert.deepEqual(hostTools(team), [])
-    const own = await (await getRepo({ workspaceId: 'user_solo', actor: { userId: 'user_solo', name: 'Solo' } })).listChannels()
-    assert.ok(hostTools(own).length > 0, 'an owner alone gets the defaults, as in local mode')
+    const operator = await (await getRepo({ workspaceId: 'user_op', actor: { userId: 'user_op', name: 'Op', operator: true } })).listChannels()
+    assert.ok(hostTools(operator).length > 0, "an operator's own workspace gets the defaults, as in local mode")
+    const stranger = await (await getRepo({ workspaceId: 'user_anyone', actor: { userId: 'user_anyone', name: 'Anyone' } })).listChannels()
+    assert.deepEqual(hostTools(stranger), [], "anyone else's personal workspace gets none: nobody there may grant them")
   })
 
   test(`${label}: a workspace can neither see nor touch another workspace's channels`, async () => {
@@ -233,7 +235,7 @@ export function repositoryContract(label: string, getRepo: (scope?: Scope) => Pr
     await local.sendMessage(localUrl, 'written before sign-in')
     const localUrls = (await local.listChannels()).map((c) => c.channelUrl).sort()
     const localSkills = (await local.listSkillIds()).sort()
-    assert.equal(await alice.claimLocalData('user_alice'), 'claimed')
+    assert.equal(await alice.claimLocalData({ userId: 'user_alice', name: 'Alice' }), 'claimed')
     const claimed = await alice.listChannels()
     assert.deepEqual(claimed.map((c) => c.channelUrl).sort(), localUrls, 'every local bot moved, and no starter set was added')
     assert.ok(localUrls.includes(localUrl))
@@ -241,6 +243,7 @@ export function repositoryContract(label: string, getRepo: (scope?: Scope) => Pr
     assert.ok(localSkills.includes(skill.id))
     const before = (await alice.listMessages(localUrl))!.find((m) => isUserMessage(m.message) && m.message.message === 'written before sign-in')
     assert.equal(before?.message.sender.userId, 'user_alice', 'what the local person sent is now the claimant\'s')
+    assert.equal(before?.message.sender.nickname, 'Alice', 'under their name, which is what a bot\'s transcript reads')
     assert.deepEqual(await local.listChannels(), [], 'nothing is left in local')
     assert.deepEqual(await local.listSkillIds(), [])
     assert.equal(
@@ -250,9 +253,9 @@ export function repositoryContract(label: string, getRepo: (scope?: Scope) => Pr
     )
 
     const bob = await getRepo({ workspaceId: 'user_bob', actor: { userId: 'user_bob', name: 'Bob' } })
-    assert.equal(await bob.claimLocalData('user_bob'), 'already', 'a second person gets nothing')
+    assert.equal(await bob.claimLocalData({ userId: 'user_bob', name: 'Bob' }), 'already', 'a second person gets nothing')
     const later = await local.createChannel({ name: 'Made Later', assistant: tpl })
-    assert.equal(await bob.claimLocalData('user_bob'), 'already')
+    assert.equal(await bob.claimLocalData({ userId: 'user_bob', name: 'Bob' }), 'already')
     assert.ok(await local.getChannel(later.channelUrl), 'data created after the claim stays local')
   })
 }

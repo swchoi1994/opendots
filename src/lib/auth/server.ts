@@ -1,5 +1,5 @@
 import { getRepository } from '../repository'
-import { LOCAL_VIEWER, authMode, viewerFromAuth, type AuthFacts, type Viewer } from './viewer'
+import { LOCAL_VIEWER, authMode, operatorIds, viewerFromAuth, type AuthFacts, type Viewer } from './viewer'
 
 /**
  * The request's viewer, on the server.
@@ -49,9 +49,9 @@ export function setAuthSourceForTests(source: AuthSource | null): void {
  */
 let claimed: Promise<void> | null = null
 
-function claimLocalDataOnce(userId: string): Promise<void> {
+function claimLocalDataOnce(claimant: { userId: string; name: string }): Promise<void> {
   claimed ??= getRepository()
-    .claimLocalData(userId)
+    .claimLocalData(claimant)
     .then(
       () => undefined,
       (error: unknown) => {
@@ -64,9 +64,13 @@ function claimLocalDataOnce(userId: string): Promise<void> {
 
 export async function getViewer(env: Partial<NodeJS.ProcessEnv> = process.env): Promise<Viewer | null> {
   if (authMode(env) === 'local') return LOCAL_VIEWER
-  const viewer = viewerFromAuth(await authSource())
-  // Only a personal workspace claims: data made alone shouldn't land in a team.
-  if (viewer && viewer.workspaceId === viewer.userId) await claimLocalDataOnce(viewer.userId)
+  const viewer = viewerFromAuth(await authSource(), operatorIds(env))
+  // Only an operator, in their personal workspace, claims: the local data is
+  // the operator's own (logged-in browser profiles included), and data made
+  // alone shouldn't land in a team. With no operators listed, it stays local.
+  if (viewer?.operator && viewer.workspaceId === viewer.userId) {
+    await claimLocalDataOnce({ userId: viewer.userId, name: viewer.name })
+  }
   return viewer
 }
 

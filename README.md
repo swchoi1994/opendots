@@ -63,7 +63,7 @@ OpenDots runs agents that act on your computer. These are the boundaries:
 - **Terminal means host access.** Shell commands run as your user and aren't confined. The Terminal tool is off by default, and the app warns when a bot has both Terminal and Browser.
 - **Web pages are untrusted input.** Text a bot reads on a page can carry instructions. Keep a browsing bot's other tools to a minimum.
 - **Secrets stay with the server.** A bot's process gets basic variables (`PATH`, `HOME`) and the credentials for its own model, nothing else. Database URLs, the share-link secret and the Clerk keys are withheld.
-- **Only admins give bots reach into the server.** In a workspace with members, only its admins can turn on Files, Terminal, Skills or Browser for a bot, or show a bot's browser window. A bot runs with the tools it has whoever messages it, so the admin who granted them vouches for it.
+- **Only operators give bots reach into the server.** Files, Terminal, Skills and Browser act on the server itself, and Terminal in any workspace reaches every workspace, the database and the server's keys. So with sign-in on, only the Clerk users you list in `OPENDOTS_OPERATORS` can turn them on for a bot, or show a bot's browser window, and only in workspaces where they are admins. A bot runs with the tools it has whoever messages it, so the operator who granted them vouches for it.
 - **Share links are a passcode gate**, not accounts.
 - **"Irreversible?" badges are hints.** They come from matching words like "Pay" or "Delete" in what the bot clicks, and they block nothing.
 
@@ -72,6 +72,7 @@ OpenDots runs agents that act on your computer. These are the boundaries:
 Sign-in is optional. Without it OpenDots is single-user and local: every request is you, and it listens only on `127.0.0.1`. With [Clerk](https://clerk.com) configured, people sign in with Google, Microsoft or email, and work in a workspace:
 
 - **Personal:** yours alone, and you are its admin.
+- **Operators:** the people who run the server, listed by Clerk user id in `OPENDOTS_OPERATORS`. Only they can give bots Files, Terminal, Skills or Browser (see the [safety model](#safety-model)). Leave it unset and nobody can: bots still chat, search documents and remember.
 - **Teams:** Clerk organizations. Everyone in a team sees the same bots, chats and documents, and each message carries its sender's name. Organization admins (`org:admin`) are the team's admins.
 
 Switch workspace from the menu at the bottom of the bot list.
@@ -81,10 +82,13 @@ Switch workspace from the menu at the bottom of the bot list.
 1. Create a Clerk application with Google and Microsoft sign-in, and Organizations on with personal accounts allowed.
 2. Add these session token claims, which is where OpenDots reads names and pictures from: `name` = `{{user.full_name}}`, `image` = `{{user.image_url}}`, `email` = `{{user.primary_email_address}}`.
 3. Put both keys in `.env.local`. With only one of them set, OpenDots stays local.
+4. Sign in once, then list yourself as an operator with your Clerk user id (`user_…`, shown in the Clerk dashboard under Users, or by `clerk users list`).
+5. Before anyone else can reach the server, decide who may sign up. Clerk lets anyone create an account by default; switch sign-ups to invitation-only (restricted) or a waitlist in the Clerk dashboard. Everyone who signs in can chat with bots, and the bots run on your model credentials.
 
 ```bash
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
 CLERK_SECRET_KEY=sk_test_...
+OPENDOTS_OPERATORS=user_...
 ```
 
 The same setup with the [Clerk CLI](https://clerk.com/docs), as it was done for this repository:
@@ -102,18 +106,18 @@ Google sign-in was already on in the new application. A development instance sig
 
 ### Who can do what
 
-| | Admin | Member |
-| --- | --- | --- |
-| Chat with any bot, create bots, upload documents, make share links | ✓ | ✓ |
-| Turn on Files, Terminal, Skills or Browser for a bot | ✓ | Can turn them off, not on |
-| Show a bot's browser window | ✓ | – |
-| Delete a bot, every bot, or a document | ✓ | – |
+| | Admin who is an operator | Admin | Member |
+| --- | --- | --- | --- |
+| Chat with any bot, create bots, upload documents, make share links | ✓ | ✓ | ✓ |
+| Turn on Files, Terminal, Skills or Browser for a bot | ✓ | Can turn them off, not on | Can turn them off, not on |
+| Show a bot's browser window | ✓ | – | – |
+| Delete a bot, every bot, or a document | ✓ | ✓ | – |
 
-A new team's starter bots begin without Files, Skills or Browser; an admin turns on what the team needs.
+Starter bots come with Files, Skills and Browser only in local mode and in an operator's personal workspace. Everywhere else they start without them, and an operator who is an admin there turns on what's needed.
 
 ### What happens to data from before sign-in
 
-The first person to sign in to their personal workspace takes over the bots, chats and documents made in local mode, once. Later sign-ins start fresh, and anything made in local mode after that stays local.
+The first operator to sign in to their personal workspace takes over the bots, chats and documents made in local mode, once, including what they sent and read there. Later sign-ins start fresh, and anything made in local mode after that stays local. With no operator listed, nobody takes it over.
 
 ### Share links
 
@@ -125,7 +129,7 @@ OpenDots doesn't hear about deletions in Clerk. A person or team deleted there l
 
 ### Serving beyond this machine
 
-With sign-in on, set `OPENDOTS_LISTEN_HOST` (for example `0.0.0.0`) and run `pnpm start`. Requests must still be addressed to a name OpenDots answers to, so add yours to `OPENDOTS_ALLOWED_HOSTS`, and serve it over HTTPS through a reverse proxy. Without sign-in, `pnpm start` refuses any address but loopback.
+With sign-in on, operators listed and sign-ups restricted, set `OPENDOTS_LISTEN_HOST` (for example `0.0.0.0`) and run `pnpm start`. Requests must still be addressed to a name OpenDots answers to, so add yours to `OPENDOTS_ALLOWED_HOSTS`, and serve it over HTTPS through a reverse proxy. Without sign-in, `pnpm start` refuses any address but loopback.
 
 ## Configuration
 
@@ -148,6 +152,7 @@ Put values in `.env.local` (see `.env.example`). All are optional.
 | `DEPLOYMENT_SESSION_SECRET` | random per process | Signs share-link sessions |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | – | Clerk publishable key; with `CLERK_SECRET_KEY`, turns sign-in on |
 | `CLERK_SECRET_KEY` | – | Clerk secret key; never sent to the browser or to a bot |
+| `OPENDOTS_OPERATORS` | – | Comma-separated Clerk user ids allowed to give bots Files, Terminal, Skills or Browser, and to take over local data |
 | `OPENDOTS_LISTEN_HOST` | `127.0.0.1` | Address `pnpm start` listens on; anything but loopback needs sign-in |
 | `OPENDOTS_ALLOWED_HOSTS` | – | Comma-separated extra host names the server answers to (for example `opendots.lan` or `box.local:8080`); loopback names always work |
 | `RAG_ENABLED` | `true` | `false` turns document search off |
@@ -167,7 +172,7 @@ Put values in `.env.local` (see `.env.example`). All are optional.
 docker compose up --build
 ```
 
-This starts OpenDots, reachable only from `127.0.0.1:3000`, and a Postgres server with pgvector that only the app can reach. The app finds Ollama on your machine at `host.docker.internal:11434`. On Linux, Ollama listens on `127.0.0.1` by default, which a container can't reach: start it with `OLLAMA_HOST=0.0.0.0 ollama serve`, and note that this also exposes Ollama to your local network. To use Claude, export `ANTHROPIC_API_KEY` in your shell first; to turn on [sign-in](#sign-in-and-workspaces), export the two Clerk keys too. Only with sign-in on is it safe to publish the port beyond `127.0.0.1` (change `ports` in `docker-compose.yml`, and list your host name in `OPENDOTS_ALLOWED_HOSTS`). The image has no browser, so the Browser tool works only when you run OpenDots on the host with `pnpm dev` or `pnpm start`.
+This starts OpenDots, reachable only from `127.0.0.1:3000`, and a Postgres server with pgvector that only the app can reach. The app finds Ollama on your machine at `host.docker.internal:11434`. On Linux, Ollama listens on `127.0.0.1` by default, which a container can't reach: start it with `OLLAMA_HOST=0.0.0.0 ollama serve`, and note that this also exposes Ollama to your local network. To use Claude, export `ANTHROPIC_API_KEY` in your shell first; to turn on [sign-in](#sign-in-and-workspaces), export the two Clerk keys and `OPENDOTS_OPERATORS` too. Publish the port beyond `127.0.0.1` only with sign-in on, operators listed and sign-ups restricted (change `ports` in `docker-compose.yml`, and list your host name in `OPENDOTS_ALLOWED_HOSTS`). The image has no browser, so the Browser tool works only when you run OpenDots on the host with `pnpm dev` or `pnpm start`.
 
 ## Development
 

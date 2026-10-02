@@ -33,7 +33,7 @@ test('pglite: after a claim, a restarted process lists an empty local workspace 
   const first = pgliteDb(pg)
   await migrate(first)
   const seeded = await new PostgresChatRepository(first).listChannels()
-  assert.equal(await new PostgresChatRepository(first).claimLocalData('user_claimant'), 'claimed')
+  assert.equal(await new PostgresChatRepository(first).claimLocalData({ userId: 'user_claimant', name: 'Claimant' }), 'claimed')
 
   // A new Db handle over the same data has no seeding memory: a restarted process.
   const restarted = pgliteDb(pg)

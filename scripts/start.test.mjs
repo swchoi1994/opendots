@@ -7,7 +7,10 @@ const KEYS = { NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: 'pk_test_x', CLERK_SECRET_KEY:
 
 test('by default OpenDots listens on 127.0.0.1, and extra arguments pass through', () => {
   assert.deepEqual(startArgs({}), { args: ['start', '-H', '127.0.0.1'] })
-  assert.deepEqual(startArgs({ OPENDOTS_LISTEN_HOST: '  ' }, ['-p', '3130']), { args: ['start', '-p', '3130', '-H', '127.0.0.1'] })
+  assert.deepEqual(startArgs({ OPENDOTS_LISTEN_HOST: '  ' }, ['-p', '3130']), { args: ['start', '-H', '127.0.0.1', '-p', '3130'] })
+  assert.deepEqual(startArgs({}, ['-p3130', '--port=3131', '--keepAliveTimeout', '5000']), {
+    args: ['start', '-H', '127.0.0.1', '-p', '3130', '--port', '3131', '--keepAliveTimeout', '5000'],
+  })
 })
 
 test('without sign-in, only loopback addresses are allowed', () => {
@@ -24,9 +27,17 @@ test('with sign-in on, any address is allowed', () => {
   assert.deepEqual(startArgs({ ...KEYS, OPENDOTS_LISTEN_HOST: '0.0.0.0' }), { args: ['start', '-H', '0.0.0.0'] })
 })
 
-test('-H on the command line is refused, so it cannot step around the check', () => {
-  for (const argv of [['-H', '0.0.0.0'], ['-H0.0.0.0'], ['-H=0.0.0.0'], ['--hostname', '0.0.0.0'], ['--hostname=0.0.0.0'], ['-p', '3130', '-H0.0.0.0']]) {
-    assert.match(startArgs({}, argv).error ?? '', /OPENDOTS_LISTEN_HOST/)
+test('anything but a port or keep-alive on the command line is refused, so nothing can step around the check', () => {
+  const attempts = [
+    ['-H', '0.0.0.0'], ['-H0.0.0.0'], ['-H=0.0.0.0'], ['--hostname', '0.0.0.0'], ['--hostname=0.0.0.0'], ['-p', '3130', '-H0.0.0.0'],
+    // `--` makes Next take the rest as a directory and drop the -H that follows (Next then listens on 0.0.0.0).
+    ['--', '.'], ['.'],
+    // The Node inspector on the network is remote code execution.
+    ['--inspect', '0.0.0.0:9229'], ['--inspect=0.0.0.0:9229'],
+    ['-p'], ['-p', 'abc'], ['--port='],
+  ]
+  for (const argv of attempts) {
+    assert.match(startArgs({}, argv).error ?? '', /OPENDOTS_LISTEN_HOST/, JSON.stringify(argv))
   }
 })
 

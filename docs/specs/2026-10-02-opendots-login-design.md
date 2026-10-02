@@ -62,6 +62,7 @@ export interface Viewer {
 
 `viewerFromAuth(auth)` is a pure function over `{ userId, orgId, isAdmin, claims }`:
 - A personal workspace is the user's own id, with role `admin`.
+- `operator` is true when the user id is listed in `OPENDOTS_OPERATORS` (comma-separated Clerk user ids); the local viewer is always an operator. Being an admin of some workspace isn't enough to reach the host, because anyone who can sign up is the admin of their personal workspace (§8, amended after the whole-branch review).
 - An organization is `orgId`, with role `admin` when `has({ role: 'org:admin' })`, otherwise `member`.
 - The name comes from the `name` claim. Clerk renders an unset full name as an empty string, so the name falls back to the local part of the `email` claim, then to "Someone"; a raw user id is never shown. The picture comes from the `image` claim, or `null`.
 
@@ -81,7 +82,7 @@ Rows that exist today stay in `local`. Messages, read receipts, sessions, screen
 - **Creating:** `createChannel` and `createSkill` create in the scope's workspace.
 - **Every method naming a channel or skill:** a channel or skill outside the workspace is reported exactly like a missing one (`CHANNEL_NOT_FOUND` / `SKILL_NOT_FOUND`, 404). Nothing reveals that another workspace's channel exists.
 - **Identity:** `sendMessage` records `scope.actor` as the sender, and read receipts are per `scope.actor.userId`. A person with no receipt in a channel has every message they didn't send unread.
-- **Seeding:** the nine starter bots are seeded per workspace, the first time in a process that `listChannels` finds the workspace empty; deleting a bot or all bots lets the next listing look again. If any of a workspace's seed URLs is already taken, it gets no starter bots at all (after a claim, the claimed bots keep `local`'s URLs, so a later `local` listing finds them taken). Starter bots keep their default tools where the person seeding owns the workspace alone (`local`, or their personal workspace); in an organization they start without host-reaching tools (§8). Seeded channel URLs are `bot_<slug>` in `local` (A's URLs, unchanged) and `bot_<slug>_<8 hex of sha256(workspaceId)>` elsewhere, because channel URLs are unique across the whole instance.
+- **Seeding:** the nine starter bots are seeded per workspace, the first time in a process that `listChannels` finds the workspace empty; deleting a bot or all bots lets the next listing look again. If any of a workspace's seed URLs is already taken, it gets no starter bots at all (after a claim, the claimed bots keep `local`'s URLs, so a later `local` listing finds them taken). Starter bots keep their default tools only in `local` and in an operator's personal workspace; everywhere else they start without host-reaching tools (§8). Seeded channel URLs are `bot_<slug>` in `local` (A's URLs, unchanged) and `bot_<slug>_<8 hex of sha256(workspaceId)>` elsewhere, because channel URLs are unique across the whole instance.
 - **Turn context:** `loadTurnContext` and the respond route use the scope too, so a bot's transcript shows each person's real name.
 
 **Share-link (deployment) routes** look the channel up by deployment id. `getDeployment` stays unscoped and its result gains the channel's `workspaceId`. They then act in that workspace with a visitor viewer, `{ userId: 'visitor_<deploymentId>', name: 'Visitor' }`, so a visitor's messages are attributed to "Visitor". The passcode check stays the gate, and visitors stay restricted (§8).
@@ -106,7 +107,7 @@ Rows that exist today stay in `local`. Messages, read receipts, sessions, screen
 
 ## 8. Permissions
 
-**Host-reaching tools** are `files`, `shell`, `skills` and `web_browser` (the same list A uses for share-link visitors). `canGrantHostTools(viewer) = viewer.role === 'admin'`.
+**Host-reaching tools** are `files`, `shell`, `skills` and `web_browser` (the same list A uses for share-link visitors). `canGrantHostTools(viewer) = viewer.role === 'admin' && viewer.operator`. A shell in any workspace reaches every workspace, the database and the server's keys, and Clerk's default sign-up is open to anyone, so the right to grant these belongs to the server's operators (`OPENDOTS_OPERATORS`), exercised in workspaces they administer. The README tells operators to restrict sign-ups before exposing the server. Showing a bot's browser window needs the same right.
 
 On `createChannel` and `updateAssistant`, `assertToolChange(viewer, before, after)`:
 - for a member, any host-reaching tool in `after` that is not in `before` returns 403 `{ code: 'ADMIN_ONLY' }`;
@@ -126,9 +127,9 @@ On `createChannel` and `updateAssistant`, `assertToolChange(viewer, before, afte
 
 ## 9. Claiming local data
 
-It runs from `getViewer()` in Clerk mode, whenever the viewer is in their **personal** workspace. Once a process has seen the `local_data` row, it remembers that and stops checking. `claimLocalData(userId)` runs once, in one transaction under an advisory lock:
+It runs from `getViewer()` in Clerk mode, whenever the viewer is an **operator** in their **personal** workspace (the local data is the operator's own, logged-in browser profiles included; with no operators listed it stays local). Once a process has seen the `local_data` row, it remembers that and stops checking. `claimLocalData({ userId, name })` runs once, in one transaction under an advisory lock:
 - If `instance_claims` has no `local_data` row and any channel or skill is in `local`, move them all to `workspace_id = userId`.
-- Copy the local person's (`user_me`) read receipts to `userId`, so the claimed bots don't all arrive unread.
+- Copy the local person's (`user_me`) read receipts to `userId`, so the claimed bots don't all arrive unread, and make the messages they sent the claimant's (`sender_id = userId`, `sender_name = name`), so they stay on the claimant's side and a bot's transcript names them.
 - Insert `local_data = userId`.
 
 Once that row exists the claim never runs again, for anyone. A claim that finds nothing in `local` still writes the row, so data created later in a local-mode session stays local. Viewers in a team workspace never trigger a claim.
@@ -162,7 +163,7 @@ The memory store implements the same rule. Its data doesn't survive a restart, w
 | Bot subprocess environment (`baseEnv`/`brainEnv`) | Unchanged. `CLERK_SECRET_KEY` and the publishable key are not on the allowlist (a test asserts this). |
 | Proxy request guard | Unchanged in local mode; in Clerk mode it runs inside `clerkMiddleware` |
 | Public routes (no viewer needed) | `/sign-in/*`, `/sign-up/*`, `/app/*`, `/api/deployments/*`, `/api/health` (reduced output) |
-| Host-tool grants | Admins only (§8); members may only remove |
+| Host-tool grants | Admins who are operators (§8); everyone else may only remove |
 | Share-link visitor restrictions | Unchanged |
 | Listening beyond loopback | Allowed only in Clerk mode (§10) |
 

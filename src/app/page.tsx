@@ -16,7 +16,14 @@ export default async function Home() {
     <ChatShell
       // Switching workspace reloads this page; a new key starts the chat state over.
       key={viewer.workspaceId}
-      viewer={{ userId: viewer.userId, name: viewer.name, imageUrl: viewer.imageUrl, role: viewer.role, clerk: authMode() === 'clerk' }}
+      viewer={{
+        userId: viewer.userId,
+        name: viewer.name,
+        imageUrl: viewer.imageUrl,
+        role: viewer.role,
+        operator: viewer.operator,
+        clerk: authMode() === 'clerk',
+      }}
     />
   )
 }

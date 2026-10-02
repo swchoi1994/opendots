@@ -14,6 +14,8 @@ export interface ClientViewer {
   name: string
   imageUrl: string | null
   role: Role
+  /** May grant host-reaching tools: listed in OPENDOTS_OPERATORS, or local mode. */
+  operator: boolean
   /** Signed in through Clerk; false in local mode and on share links. */
   clerk: boolean
 }
@@ -23,12 +25,13 @@ export const LOCAL_CLIENT_VIEWER: ClientViewer = {
   name: LOCAL_VIEWER.name,
   imageUrl: LOCAL_VIEWER.imageUrl,
   role: LOCAL_VIEWER.role,
+  operator: LOCAL_VIEWER.operator,
   clerk: false,
 }
 
 /** A share link's visitor, matching the server's `visitorScope`. */
 export function visitorViewer(deploymentId: string): ClientViewer {
-  return { userId: `visitor_${deploymentId}`, name: 'Visitor', imageUrl: null, role: 'member', clerk: false }
+  return { userId: `visitor_${deploymentId}`, name: 'Visitor', imageUrl: null, role: 'member', operator: false, clerk: false }
 }
 
 const ViewerContext = createContext<ClientViewer>(LOCAL_CLIENT_VIEWER)

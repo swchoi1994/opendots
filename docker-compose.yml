@@ -1,7 +1,8 @@
 # OpenDots and a Postgres server with pgvector. Only the app is published, and
 # only on 127.0.0.1: without sign-in, whoever reaches it controls every bot.
-# Publish it further only with the Clerk keys set (README, "Sign-in and
-# workspaces"), and list the public host name in OPENDOTS_ALLOWED_HOSTS.
+# Publish it further only with the Clerk keys set, operators listed and
+# sign-ups restricted (README, "Sign-in and workspaces"), and list the public
+# host name in OPENDOTS_ALLOWED_HOSTS.
 # Postgres is reachable from the app alone (and never collides with a Postgres
 # already running on the host).
 #
@@ -32,6 +33,7 @@ services:
       # Sign-in: both set turns it on, both empty keeps OpenDots local.
       NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      OPENDOTS_OPERATORS: ${OPENDOTS_OPERATORS:-}
       OPENDOTS_ALLOWED_HOSTS: ${OPENDOTS_ALLOWED_HOSTS:-}
     extra_hosts:
       - 'host.docker.internal:host-gateway'
