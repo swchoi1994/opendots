@@ -1,5 +1,7 @@
-# OpenDots and a Postgres server with pgvector. Both ports are bound to
-# 127.0.0.1: there is no sign-in yet, so nothing here should face a network.
+# OpenDots and a Postgres server with pgvector. Only the app is published, and
+# only on 127.0.0.1: there is no sign-in yet, so nothing here should face a
+# network. Postgres is reachable from the app alone (and never collides with a
+# Postgres already running on the host).
 #
 #   docker compose up --build
 #   docker compose logs -f app
@@ -43,8 +45,6 @@ services:
       POSTGRES_USER: opendots
       POSTGRES_PASSWORD: opendots
       POSTGRES_DB: opendots
-    ports:
-      - '127.0.0.1:5432:5432'
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:

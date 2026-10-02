@@ -20,7 +20,23 @@ export function sessionSecret(env: Partial<NodeJS.ProcessEnv> = process.env): st
   return env.DEPLOYMENT_SESSION_SECRET || randomBytes(32).toString('hex')
 }
 
-const SESSION_SECRET = sessionSecret()
+const globalForSession = globalThis as typeof globalThis & { __opendotsSessionSecret?: string }
+
+/**
+ * The key this process signs with: the configured secret, or one random key
+ * parked on globalThis. Dev hot reload re-evaluates this module; a fresh
+ * random key on every reload would sign every share-link visitor out.
+ */
+export function processSecret(
+  env: Partial<NodeJS.ProcessEnv> = process.env,
+  holder: { __opendotsSessionSecret?: string } = globalForSession,
+): string {
+  if (env.DEPLOYMENT_SESSION_SECRET) return env.DEPLOYMENT_SESSION_SECRET
+  holder.__opendotsSessionSecret ??= sessionSecret(env)
+  return holder.__opendotsSessionSecret
+}
+
+const SESSION_SECRET = processSecret()
 
 export function cookieNameFor(deploymentId: string): string {
   return `${COOKIE_PREFIX}${deploymentId}`

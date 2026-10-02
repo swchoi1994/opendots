@@ -38,7 +38,7 @@ ollama pull qwq                                  # the model OpenDots was tested
 OLLAMA_CONTEXT_LENGTH=32768 ollama serve
 ```
 
-OpenDots looks for Ollama at `http://localhost:11434` (set `OLLAMA_HOST` for another address) and lists its tool-capable models in every bot's model picker as `ollama/<name>`.
+OpenDots looks for Ollama at `http://localhost:11434` (set `OLLAMA_HOST` for another address) and lists its tool-capable models in every bot's model picker as `ollama/<name>`. It was tested with Ollama 0.34; older versions may not report which models support tools, and then none are listed.
 
 **Claude, with an Anthropic API key.**
 
@@ -46,9 +46,9 @@ OpenDots looks for Ollama at `http://localhost:11434` (set `OLLAMA_HOST` for ano
 echo 'ANTHROPIC_API_KEY=sk-ant-...' >> .env.local
 ```
 
-Restart `pnpm dev` and Claude Sonnet, Opus and Haiku become selectable. Set `ANTHROPIC_BASE_URL` as well to use another Anthropic-compatible endpoint, such as a LiteLLM proxy or OpenRouter.
+Restart `pnpm dev` and Claude Sonnet, Opus and Haiku become selectable. Set `ANTHROPIC_BASE_URL` as well to use another Anthropic-compatible endpoint.
 
-Bots set to **Default** run on `OPENDOTS_DEFAULT_MODEL` if you set it; otherwise on Claude Sonnet when a key is set; otherwise on the first local Ollama model that supports tools. `curl 127.0.0.1:3000/api/health` shows what was picked and what is missing.
+Bots set to **Default** run on `OPENDOTS_DEFAULT_MODEL` if you set it; otherwise on Claude Sonnet when a key is set; otherwise on the first local Ollama model that supports tools, in the order Ollama lists them. With several models pulled, set `OPENDOTS_DEFAULT_MODEL` (for example `ollama/qwq:latest`) so the choice is yours. `curl 127.0.0.1:3000/api/health` shows what was picked and what is missing.
 
 OpenDots doesn't sign in with a Claude.ai subscription. Bots run on the Anthropic API or on Ollama.
 
@@ -103,7 +103,7 @@ Put values in `.env.local` (see `.env.example`). All are optional.
 docker compose up --build
 ```
 
-This starts OpenDots and a Postgres server with pgvector, both reachable only from `127.0.0.1`. The app finds Ollama on your machine at `host.docker.internal:11434`. To use Claude, export `ANTHROPIC_API_KEY` in your shell first. The image has no browser, so the Browser tool works only when you run OpenDots on the host with `pnpm dev` or `pnpm start`.
+This starts OpenDots, reachable only from `127.0.0.1:3000`, and a Postgres server with pgvector that only the app can reach. The app finds Ollama on your machine at `host.docker.internal:11434`. On Linux, Ollama listens on `127.0.0.1` by default, which a container can't reach: start it with `OLLAMA_HOST=0.0.0.0 ollama serve`, and note that this also exposes Ollama to your local network. To use Claude, export `ANTHROPIC_API_KEY` in your shell first. The image has no browser, so the Browser tool works only when you run OpenDots on the host with `pnpm dev` or `pnpm start`.
 
 ## Development
 
@@ -156,6 +156,7 @@ The planner decides retrieval, the system prompt and tool grants without calling
 - No sign-in yet (see the safety model).
 - The browser isn't sandboxed, and the container image has no browser.
 - The file guard checks each path before a tool runs; it is not an operating-system sandbox, so a symlink swapped in between the check and the file operation is not caught.
+- For a recursive Glob or Grep the guard checks the starting folder only; a symlink planted inside the workspace could be followed by the search.
 - Captured browser frames accumulate until their bot is deleted.
 - Document search is lexical, so it misses paraphrases.
 - Local models must support tool calling, and answer quality depends on the model.

@@ -40,14 +40,11 @@ A bot's `model` string decides the provider:
 | `ollama/<name>`, for example `ollama/qwq:latest` | Ollama at `OLLAMA_HOST` (default `http://localhost:11434`) | `<name>` |
 | anything else: `sonnet`, `opus`, `haiku`, or a full Claude model id | Anthropic | unchanged |
 
-New module `src/lib/ai/providers.ts`:
+These rules live in three modules (amended after implementation; the design first named a single `providers.ts`):
 
-```ts
-export type ProviderId = 'anthropic' | 'ollama'
-export interface ResolvedModel { provider: ProviderId; sdkModel: string }
-export function resolveModel(model: string): ResolvedModel
-export function brainEnv(resolved: ResolvedModel, source: NodeJS.ProcessEnv, dataDir: string): Record<string, string>
-```
+- `src/lib/domain/models.ts`, pure and safe for the browser: `ProviderId`, `ResolvedModel`, `resolveModel(model)`, `modelBadge(model)`, the picker's options and `optionState`.
+- `src/lib/ai/brain-env.ts`, server only: `baseEnv(source)` (the one allowlist that the brain, the browser tool and skills.sh all use) and `brainEnv(resolved, source, dataDir)`.
+- `src/lib/ai/model-catalog.ts`, server only: `ollamaHost`, `listOllamaModels`, `resolveDefaultModel` and `buildModelOptions`.
 
 `brainEnv` builds the CLI subprocess environment. It replaces `scrubbedEnv` and keeps its deny-by-default rule:
 
@@ -111,6 +108,7 @@ export function getDb(): Db   // PGlite or pg Pool, chosen by DATA_STORE; parked
 
 - Next.js may try to bundle PGlite's WASM files. If so, add `serverExternalPackages: ['@electric-sql/pglite', '@electric-sql/pglite-pgvector']` to `next.config.ts`.
 - PGlite allows one connection. Concurrent route handlers share the instance, and `transaction` holds it for the length of the callback. The seed transaction is the only long one.
+- One process per data directory (amended after the final review): two processes opening the same PGlite directory both succeed and then silently lose data. The embedded store takes a lock file (`<data dir>/db.lock`, holding its pid). A second process fails with a message naming the directory and the holding pid; a lock left by a dead pid is reclaimed.
 
 ### 4.5 Compose
 
@@ -129,6 +127,7 @@ A `PreToolUse` hook, added in `runBot` for every run, checks every call to `Read
 - **Paths checked:** `file_path`, `notebook_path` and `path`. For `Glob`, also `pattern` when it is absolute or contains `..`.
 - **Resolution:** each value is resolved against the workspace. Then `realpath` is taken of the nearest existing ancestor, so a symlink inside the workspace can't point out of it.
 - **Decision:** a path outside `realpath(workspaceDir)` is denied with "Bots can only use files inside their own workspace."
+- **Configuration is read-only to the bot** (amended after the final review): with `settingSources: ['project']` the CLI loads the workspace's `.claude/` settings, whose hooks run shell commands and whose `env` can redirect `ANTHROPIC_BASE_URL`. Write, Edit and NotebookEdit are therefore denied for `<ws>/.claude/**`, `<ws>/.mcp.json`, `<ws>/CLAUDE.md` and `<ws>/CLAUDE.local.md`, on the real path and case-insensitively on macOS and Windows. Reads stay allowed. `install_skill` writes skills from server code, not through these tools.
 
 The logic is a pure function, `checkWorkspacePath(tool, input, workspaceDir)`, in `src/lib/ai/tools/workspace-guard.ts`.
 
@@ -154,6 +153,7 @@ Today `deployment-session.ts` reads `DEPLOYMENT_SESSION_SECRET` with `??`, so an
 | Tool grant map (`grants.ts`) | Unchanged |
 | Default tools (`DEFAULT_ASSISTANT.tools`) | Unchanged: `rag_search`, `channel_history`, `files`, `skills`, `web_browser`; no `shell` |
 | Share-link visitor grants | Unchanged |
+| New request proxy (`src/proxy.ts`, amended after the final review) | Refuses with 403 any non-GET `/api/*` request that is cross-site (`Sec-Fetch-Site: cross-site`, or an `Origin` whose host differs from `Host`), and any request whose `Host` is not a loopback name or listed in `OPENDOTS_ALLOWED_HOSTS`. This blocks CSRF from pages the operator visits, and DNS rebinding. |
 
 ## 6. Packaging
 
@@ -187,5 +187,5 @@ Today `deployment-session.ts` reads `DEPLOYMENT_SESSION_SECRET` with `??`, so an
 ## 8. Done when
 
 - Everything in 7.1 passes in CI, and 7.2 is recorded.
-- `grep -ri "subscription\|claude login\|setup-token" --exclude-dir=docs --exclude-dir=node_modules .` finds nothing. The design docs quote the policy and are excluded on purpose.
+- `grep -rn -i -E "subscription|claude login|setup-token|CLAUDE_CODE_OAUTH" --exclude-dir=node_modules --exclude-dir=docs --exclude-dir=.next . | grep -v -E "brain-env(\.test)?\.ts|README.md:.*Claude.ai subscription"` finds nothing (amended after the final review). The excluded lines state what OpenDots does *not* do: the README sentence saying it doesn't sign in with a Claude.ai subscription, the `brain-env.ts` comment, and the `brain-env.test.ts` assertion that the token is dropped. The design docs quote the policy and are excluded on purpose.
 - The private repository's `main` has the work, merged through a pull request.
