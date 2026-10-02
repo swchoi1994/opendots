@@ -9,9 +9,9 @@
   "scripts": {
     "dev": "next dev --turbopack -H 127.0.0.1",
     "build": "next build",
-    "start": "next start -H 127.0.0.1",
+    "start": "node scripts/start.mjs",
     "lint": "eslint",
-    "test": "tsx --env-file=scripts/test.env --test \"src/**/*.test.ts\"",
+    "test": "tsx --env-file=scripts/test.env --test \"src/**/*.test.ts\" \"scripts/**/*.test.mjs\"",
     "typecheck": "tsc --noEmit",
     "eval": "tsx scripts/run-evals.ts",
     "db:init": "tsx scripts/db-init.ts"

@@ -88,7 +88,7 @@ Rows that exist today stay in `local`. Messages, read receipts, sessions, screen
 
 ## 7. Routes, pages and the proxy
 
-**Proxy.** In Clerk mode, `src/proxy.ts` wraps A's request guard in `clerkMiddleware(...)`, which only makes `auth()` available; protection happens per route. In local mode, the proxy is A's guard alone (`clerkMiddleware` needs the keys).
+**Proxy.** In Clerk mode, `src/proxy.ts` wraps A's request guard in `clerkMiddleware(...)`, which only makes `auth()` available; protection happens per route. In local mode, the proxy is A's guard alone (`clerkMiddleware` needs the keys). `clerkMiddleware` and `<ClerkProvider>` both name `/sign-in` and `/sign-up`, so nobody is sent to Clerk's hosted pages. `next.config.ts` sets `skipProxyUrlNormalize: true`: otherwise Next gives the proxy a `localhost` URL while serving `127.0.0.1`, Clerk re-points the request at it, and Next proxies the request to itself in a loop.
 
 **Public routes** (no sign-in, Clerk mode):
 - `/sign-in/*` and `/sign-up/*`;
@@ -139,7 +139,8 @@ The memory store implements the same rule. Its data doesn't survive a restart, w
 
 `pnpm start` becomes `node scripts/start.mjs`:
 - It reads `OPENDOTS_LISTEN_HOST` (default `127.0.0.1`).
-- It refuses to start, with a clear message, if that host isn't loopback while `authMode()` is local.
+- It loads the same `.env` files `next start` does (`@next/env`), so it decides the mode Next will run in.
+- It refuses to start, with a clear message, if that host isn't loopback while `authMode()` is local, and it refuses `-H`/`--hostname` on its command line, which would step around that check.
 - Otherwise it runs `next start -H <host>` (cross-platform: `spawn` with `process.execPath` and Next's bin).
 
 `pnpm dev` stays on 127.0.0.1. Requests still pass A's Host check, so a public hostname must be in `OPENDOTS_ALLOWED_HOSTS`. Docker's documentation explains publishing beyond 127.0.0.1 when Clerk is configured.

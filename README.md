@@ -4,7 +4,7 @@ An always-on team of AI coworkers that you run yourself. Each bot is a named tea
 
 OpenDots is inspired by xAI's Grok Bot and OpenAI's Dots, and it is open source under the MIT license.
 
-> **Early project.** Sign-in, image and file attachments, bots that work with each other, graph memory and workflow graphs are being built. See the [roadmap](#roadmap).
+> **Early project.** Image and file attachments, bots that work with each other, graph memory and workflow graphs are being built. See the [roadmap](#roadmap).
 
 ## What bots can do today
 
@@ -56,15 +56,76 @@ OpenDots doesn't sign in with a Claude.ai subscription. Bots run on the Anthropi
 
 OpenDots runs agents that act on your computer. These are the boundaries:
 
-- **Local only.** `pnpm dev` and `pnpm start` listen on `127.0.0.1`. There is no sign-in yet, so anyone who can reach the port controls every bot. Don't expose an instance to a network until sign-in ships.
+- **Local unless sign-in is on.** `pnpm dev` and `pnpm start` listen on `127.0.0.1`. Without [sign-in](#sign-in-and-workspaces), anyone who can reach the port controls every bot, so `pnpm start` refuses any other address. With sign-in on, every API call except share links and the health check needs a signed-in person, and works only in that person's workspace.
 - **Web pages can't drive your bots.** OpenDots answers only requests addressed to `127.0.0.1`, `localhost` or `[::1]` (or a name you list in `OPENDOTS_ALLOWED_HOSTS`), which stops DNS-rebinding tricks. API calls that change something are refused when they come from another site, so a page you visit can't post a message to a bot and make it act.
 - **Files stay in the workspace.** Every call to Read, Write, Edit, NotebookEdit, Glob and Grep is checked, and a path outside the bot's workspace folder is refused, including one that leaves through a symlink or `~`.
 - **Bots can't change their own configuration.** Write, Edit and NotebookEdit are refused for the workspace's `.claude/` folder (settings, skills, agents, commands, hooks), `.mcp.json`, `CLAUDE.md`, `CLAUDE.local.md` and any `.git/` folder, including through a symlink or, on macOS and Windows, a different letter case or a Unicode lookalike. Those files decide what a bot's process runs, so a bot that could write them could give itself a shell. Bots can still read them, and skills still install through the Find and install skills tool, which runs the installer outside the workspace so nothing a bot writes there (a `.npmrc`, say) can change what it downloads.
 - **Terminal means host access.** Shell commands run as your user and aren't confined. The Terminal tool is off by default, and the app warns when a bot has both Terminal and Browser.
 - **Web pages are untrusted input.** Text a bot reads on a page can carry instructions. Keep a browsing bot's other tools to a minimum.
-- **Secrets stay with the server.** A bot's process gets basic variables (`PATH`, `HOME`) and the credentials for its own model, nothing else. Database URLs and the share-link secret are withheld.
+- **Secrets stay with the server.** A bot's process gets basic variables (`PATH`, `HOME`) and the credentials for its own model, nothing else. Database URLs, the share-link secret and the Clerk keys are withheld.
+- **Only admins give bots reach into the server.** In a workspace with members, only its admins can turn on Files, Terminal, Skills or Browser for a bot, or show a bot's browser window. A bot runs with the tools it has whoever messages it, so the admin who granted them vouches for it.
 - **Share links are a passcode gate**, not accounts.
 - **"Irreversible?" badges are hints.** They come from matching words like "Pay" or "Delete" in what the bot clicks, and they block nothing.
+
+## Sign-in and workspaces
+
+Sign-in is optional. Without it OpenDots is single-user and local: every request is you, and it listens only on `127.0.0.1`. With [Clerk](https://clerk.com) configured, people sign in with Google, Microsoft or email, and work in a workspace:
+
+- **Personal:** yours alone, and you are its admin.
+- **Teams:** Clerk organizations. Everyone in a team sees the same bots, chats and documents, and each message carries its sender's name. Organization admins (`org:admin`) are the team's admins.
+
+Switch workspace from the menu at the bottom of the bot list.
+
+### Set up Clerk
+
+1. Create a Clerk application with Google and Microsoft sign-in, and Organizations on with personal accounts allowed.
+2. Add these session token claims, which is where OpenDots reads names and pictures from: `name` = `{{user.full_name}}`, `image` = `{{user.image_url}}`, `email` = `{{user.primary_email_address}}`.
+3. Put both keys in `.env.local`. With only one of them set, OpenDots stays local.
+
+```bash
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+CLERK_SECRET_KEY=sk_test_...
+```
+
+The same setup with the [Clerk CLI](https://clerk.com/docs), as it was done for this repository:
+
+```bash
+clerk apps create "OpenDots"
+clerk link --app <app id>
+clerk env pull          # writes both keys to .env.local
+clerk enable orgs
+clerk config patch --json '{"connection_oauth_microsoft":{"enabled":true},"organization_settings":{"force_organization_selection":false}}'
+clerk config patch --json '{"session":{"claims":{"name":"{{user.full_name}}","image":"{{user.image_url}}","email":"{{user.primary_email_address}}"}}}'
+```
+
+Google sign-in was already on in the new application. A development instance signs in through Clerk's shared Google and Microsoft credentials; a production instance needs your own.
+
+### Who can do what
+
+| | Admin | Member |
+| --- | --- | --- |
+| Chat with any bot, create bots, upload documents, make share links | ✓ | ✓ |
+| Turn on Files, Terminal, Skills or Browser for a bot | ✓ | Can turn them off, not on |
+| Show a bot's browser window | ✓ | – |
+| Delete a bot, every bot, or a document | ✓ | – |
+
+A new team's starter bots begin without Files, Skills or Browser; an admin turns on what the team needs.
+
+### What happens to data from before sign-in
+
+The first person to sign in to their personal workspace takes over the bots, chats and documents made in local mode, once. Later sign-ins start fresh, and anything made in local mode after that stays local.
+
+### Share links
+
+Share links work as before: a link and a passcode, no account. A visitor's messages show as "Visitor", and the bot withholds Files, Terminal, Skills and Browser for their turns.
+
+### Deleting people and teams
+
+OpenDots doesn't hear about deletions in Clerk. A person or team deleted there leaves its bots, chats and documents in OpenDots's database, out of everyone's reach. To remove them, have an admin delete the bots and documents before deleting the team.
+
+### Serving beyond this machine
+
+With sign-in on, set `OPENDOTS_LISTEN_HOST` (for example `0.0.0.0`) and run `pnpm start`. Requests must still be addressed to a name OpenDots answers to, so add yours to `OPENDOTS_ALLOWED_HOSTS`, and serve it over HTTPS through a reverse proxy. Without sign-in, `pnpm start` refuses any address but loopback.
 
 ## Configuration
 
@@ -85,6 +146,9 @@ Put values in `.env.local` (see `.env.example`). All are optional.
 | `BOT_MAX_BUDGET_USD` | – | Spend ceiling per reply (Anthropic models) |
 | `BRAIN_DRY_RUN` | – | `1` answers with a canned reply, no model call |
 | `DEPLOYMENT_SESSION_SECRET` | random per process | Signs share-link sessions |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | – | Clerk publishable key; with `CLERK_SECRET_KEY`, turns sign-in on |
+| `CLERK_SECRET_KEY` | – | Clerk secret key; never sent to the browser or to a bot |
+| `OPENDOTS_LISTEN_HOST` | `127.0.0.1` | Address `pnpm start` listens on; anything but loopback needs sign-in |
 | `OPENDOTS_ALLOWED_HOSTS` | – | Comma-separated extra host names the server answers to (for example `opendots.lan` or `box.local:8080`); loopback names always work |
 | `RAG_ENABLED` | `true` | `false` turns document search off |
 | `RAG_VECTOR_STORE` | `memory` | `memory` (lexical) today |
@@ -103,7 +167,7 @@ Put values in `.env.local` (see `.env.example`). All are optional.
 docker compose up --build
 ```
 
-This starts OpenDots, reachable only from `127.0.0.1:3000`, and a Postgres server with pgvector that only the app can reach. The app finds Ollama on your machine at `host.docker.internal:11434`. On Linux, Ollama listens on `127.0.0.1` by default, which a container can't reach: start it with `OLLAMA_HOST=0.0.0.0 ollama serve`, and note that this also exposes Ollama to your local network. To use Claude, export `ANTHROPIC_API_KEY` in your shell first. The image has no browser, so the Browser tool works only when you run OpenDots on the host with `pnpm dev` or `pnpm start`.
+This starts OpenDots, reachable only from `127.0.0.1:3000`, and a Postgres server with pgvector that only the app can reach. The app finds Ollama on your machine at `host.docker.internal:11434`. On Linux, Ollama listens on `127.0.0.1` by default, which a container can't reach: start it with `OLLAMA_HOST=0.0.0.0 ollama serve`, and note that this also exposes Ollama to your local network. To use Claude, export `ANTHROPIC_API_KEY` in your shell first; to turn on [sign-in](#sign-in-and-workspaces), export the two Clerk keys too. Only with sign-in on is it safe to publish the port beyond `127.0.0.1` (change `ports` in `docker-compose.yml`, and list your host name in `OPENDOTS_ALLOWED_HOSTS`). The image has no browser, so the Browser tool works only when you run OpenDots on the host with `pnpm dev` or `pnpm start`.
 
 ## Development
 
@@ -145,7 +209,6 @@ The planner decides retrieval, the system prompt and tool grants without calling
 
 ## Roadmap
 
-- Sign-in with Google and Microsoft, and personal and team workspaces
 - Images and files in chat
 - A bot team: bots that message each other, ask each other for help, create new bots for you, and share group chats
 - Graph memory: people, companies and decisions remembered across chats
@@ -153,7 +216,7 @@ The planner decides retrieval, the system prompt and tool grants without calling
 
 ## Known limitations
 
-- No sign-in yet (see the safety model).
+- Sign-in is optional; without it, OpenDots is local only.
 - The browser isn't sandboxed, and the container image has no browser.
 - The file guard checks each path before a tool runs; it is not an operating-system sandbox, so a symlink swapped in between the check and the file operation is not caught.
 - For a recursive Glob or Grep the guard checks the starting folder only; a symlink planted inside the workspace could be followed by the search.
