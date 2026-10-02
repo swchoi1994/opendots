@@ -25,7 +25,7 @@ Bots, chats and knowledge documents belong to a workspace. With Clerk left uncon
 
 | Question | Decision |
 | --- | --- |
-| Clerk application | A new development application, **OpenDots** (`app_3K8TMGrTqQw5RKIURGo44fG0tVh`, instance `ins_3K8TMENYGSCay5df0CWVM5wPqWP`), created with the Clerk CLI. Keys live only in `.env.local`. |
+| Clerk application | A new development application, **OpenDots**, created with the Clerk CLI. Keys live only in `.env.local`. |
 | Who may grant host-reaching tools in a team workspace | **Workspace admins only** (Clerk role `org:admin`). In a personal workspace the owner is the admin. |
 | Local-mode data when sign-in is turned on | **The first person to sign in claims it**, into their personal workspace, exactly once. |
 | Share links with sign-in on | **Kept as they are.** Link plus passcode, no account needed, and visitors never get host-reaching tools. |
@@ -35,7 +35,7 @@ Bots, chats and knowledge documents belong to a workspace. With Clerk left uncon
 
 | Premise | Evidence |
 | --- | --- |
-| Clerk CLI is signed in as the owner and can manage the instance | `clerk whoami` printed `swchoi1994@gmail.com`; `clerk apps create "OpenDots"` created the app; `clerk link` and `clerk env pull` wrote `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` to the git-ignored `.env.local` |
+| Clerk CLI is signed in as the owner and can manage the instance | `clerk whoami` printed the owner's account; `clerk apps create "OpenDots"` created the app; `clerk link` and `clerk env pull` wrote `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` to the git-ignored `.env.local` |
 | Instance configuration | Through `clerk enable orgs` and `clerk config patch`: Google on; Microsoft on (Clerk's shared development credentials); Organizations on, with `creator_role: org:admin` and `force_organization_selection: false` (personal accounts allowed); session token claims `name: {{user.full_name}}` and `image: {{user.image_url}}`; password sign-in on (min length 15, breached-password check); email-code sign-in on |
 | Package compatibility | `@clerk/nextjs` 7.9.10 has `peerDependencies.next` `^16.1.0-0`, which covers our 16.2.12 |
 | Recommended protection pattern | Clerk docs: protecting through `createRouteMatcher()` in middleware is being deprecated; protect each page and route handler with `auth()` (`isAuthenticated`, `redirectToSignIn()`, `has({ role })`). `auth.protect()` returns 404 for route handlers, so route handlers return their own 401. |
