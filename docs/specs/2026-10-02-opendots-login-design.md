@@ -81,7 +81,7 @@ Rows that exist today stay in `local`. Messages, read receipts, sessions, screen
 - **Creating:** `createChannel` and `createSkill` create in the scope's workspace.
 - **Every method naming a channel or skill:** a channel or skill outside the workspace is reported exactly like a missing one (`CHANNEL_NOT_FOUND` / `SKILL_NOT_FOUND`, 404). Nothing reveals that another workspace's channel exists.
 - **Identity:** `sendMessage` records `scope.actor` as the sender, and read receipts are per `scope.actor.userId`. A person with no receipt in a channel has every message they didn't send unread.
-- **Seeding:** the nine starter bots are seeded per workspace, the first time in a process that `listChannels` finds the workspace empty; deleting a bot or all bots lets the next listing look again. A seed URL that is already taken is skipped (after a claim, the claimed bots keep `local`'s URLs, so a later `local` listing finds them taken). Seeded channel URLs are `bot_<slug>` in `local` (A's URLs, unchanged) and `bot_<slug>_<8 hex of sha256(workspaceId)>` elsewhere, because channel URLs are unique across the whole instance.
+- **Seeding:** the nine starter bots are seeded per workspace, the first time in a process that `listChannels` finds the workspace empty; deleting a bot or all bots lets the next listing look again. If any of a workspace's seed URLs is already taken, it gets no starter bots at all (after a claim, the claimed bots keep `local`'s URLs, so a later `local` listing finds them taken). Starter bots keep their default tools where the person seeding owns the workspace alone (`local`, or their personal workspace); in an organization they start without host-reaching tools (§8). Seeded channel URLs are `bot_<slug>` in `local` (A's URLs, unchanged) and `bot_<slug>_<8 hex of sha256(workspaceId)>` elsewhere, because channel URLs are unique across the whole instance.
 - **Turn context:** `loadTurnContext` and the respond route use the scope too, so a bot's transcript shows each person's real name.
 
 **Share-link (deployment) routes** look the channel up by deployment id. `getDeployment` stays unscoped and its result gains the channel's `workspaceId`. They then act in that workspace with a visitor viewer, `{ userId: 'visitor_<deploymentId>', name: 'Visitor' }`, so a visitor's messages are attributed to "Visitor". The passcode check stays the gate, and visitors stay restricted (§8).
@@ -120,7 +120,7 @@ On `createChannel` and `updateAssistant`, `assertToolChange(viewer, before, afte
 
 **Everyone in the workspace** can chat with any bot, create bots without host-reaching tools, upload documents, and make share links.
 
-**Running a bot.** A turn runs with the bot's stored tools, whoever sent the message. An admin who granted Terminal vouches for that bot.
+**Running a bot.** A turn runs with the bot's stored tools, whoever sent the message. An admin who granted Terminal vouches for that bot. So no bot in an organization holds a host-reaching tool an admin didn't grant: starter bots there are seeded without them, and a stored bot with no tool list reads as having none of them.
 
 **The UI** disables the host-reaching tool checkboxes for members, with the hint "Only workspace admins can turn this on". It's a convenience; the server rule above is the real gate.
 
@@ -128,6 +128,7 @@ On `createChannel` and `updateAssistant`, `assertToolChange(viewer, before, afte
 
 It runs from `getViewer()` in Clerk mode, whenever the viewer is in their **personal** workspace. Once a process has seen the `local_data` row, it remembers that and stops checking. `claimLocalData(userId)` runs once, in one transaction under an advisory lock:
 - If `instance_claims` has no `local_data` row and any channel or skill is in `local`, move them all to `workspace_id = userId`.
+- Copy the local person's (`user_me`) read receipts to `userId`, so the claimed bots don't all arrive unread.
 - Insert `local_data = userId`.
 
 Once that row exists the claim never runs again, for anyone. A claim that finds nothing in `local` still writes the row, so data created later in a local-mode session stays local. Viewers in a team workspace never trigger a claim.

@@ -13,8 +13,11 @@ export async function GET() {
   let viewer: Viewer | null
   try {
     viewer = await getViewer()
-  } catch {
-    // Signing in touches the store (the one-time claim); if that fails the store is the problem.
+  } catch (cause) {
+    // Signing in touches the store (the one-time claim); if that fails the store
+    // is the problem, which the brief report's own probe will show. Logged, so
+    // a claim that keeps failing is visible to whoever runs the server.
+    console.error('health: could not work out the viewer', cause)
     viewer = null
   }
   if (!viewer) {

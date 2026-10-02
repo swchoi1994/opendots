@@ -156,3 +156,12 @@ test('signed out, health says only whether the service is up', async () => {
   as(NOBODY)
   assert.deepEqual(await json(await health.GET()), { status: 200, body: { status: 'ok', service: 'opendots' } })
 })
+
+test("a member's first look at a brand-new team finds starter bots without host-reaching tools", async () => {
+  as({ userId: 'user_new', orgId: 'org_brand_new', isOrgAdmin: false, claims: { name: 'New' } })
+  const listed = await json(await channels.GET())
+  const bots = listed.body.channels as { assistant: { tools: ToolName[] } | null }[]
+  assert.equal(bots.length, 9)
+  const granted = bots.flatMap((bot) => bot.assistant?.tools ?? []).filter((tool) => ['files', 'shell', 'skills', 'web_browser'].includes(tool))
+  assert.deepEqual(granted, [], 'no admin granted them')
+})

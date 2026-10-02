@@ -220,6 +220,11 @@ interface CacheEntry {
  */
 const cache = new Map<string, CacheEntry>()
 
+/** Workspaces whose index is kept; the least recently used one is dropped past this. */
+const CACHE_LIMIT = 64
+
+const idsKeyOf = (ids: string[]) => ids.slice().sort().join(',')
+
 /**
  * Knowledge Search draws on two sources: the built-in seed corpus and every
  * uploaded skill, read through the repository's `listSkills()` /
@@ -252,12 +257,14 @@ export async function getRetriever(
     throw new RetrieverNotConfiguredError('pgvector', 'local embeddings (planned for Phase 1b); use RAG_VECTOR_STORE=memory')
   }
 
-  const ids = await repo.listSkillIds()
-  const idsKey = ids.slice().sort().join(',')
-
   const key = repo.scope.workspaceId
   const entry = cache.get(key)
-  if (entry && entry.ids === idsKey) return entry.retriever
+  if (entry && entry.ids === idsKeyOf(await repo.listSkillIds())) {
+    // Re-inserting marks it most recently used.
+    cache.delete(key)
+    cache.set(key, entry)
+    return entry.retriever
+  }
 
   const skills = await repo.listSkills()
   const skillDocuments: KnowledgeDocument[] = skills.map((skill) => ({
@@ -270,6 +277,10 @@ export async function getRetriever(
   }))
 
   const retriever = new InMemoryRetriever([...KNOWLEDGE_BASE, ...skillDocuments], config)
-  cache.set(key, { ids: idsKey, retriever })
+  // Keyed by what was actually indexed, not by an id list read earlier: a
+  // document uploaded and deleted in between would otherwise stay searchable.
+  cache.delete(key)
+  cache.set(key, { ids: idsKeyOf(skills.map((skill) => skill.id)), retriever })
+  if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value!)
   return retriever
 }

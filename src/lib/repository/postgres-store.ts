@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto'
 import { removeWorkspace } from '../bots/workspace'
-import { parseAssistantConfig, type AssistantConfig } from '../domain/assistant'
+import { DEFAULT_ASSISTANT, HOST_TOOLS, parseAssistantConfig, type AssistantConfig } from '../domain/assistant'
 import { ROSTER } from '../domain/roster'
 import { groupScreensByTurn, screenImageUrl, type NewScreen, type Screen } from '../domain/screen'
-import { assistantUser, rosterAssistant } from '../domain/seed'
+import { assistantUser } from '../domain/seed'
 import { assertUsableSkill, parseSkillMarkdown, type Skill } from '../domain/skill'
 import type {
   ChannelSummary,
@@ -31,7 +31,7 @@ import {
   type Deployment,
   type Scope,
 } from './chat-repository'
-import { seedChannelUrl } from './seed-urls'
+import { seedChannelUrl, starterAssistant } from './starter-bots'
 
 /**
  * Postgres-backed ChatRepository (exercise 5).
@@ -101,8 +101,21 @@ interface ChannelRow {
   unread_count: number
 }
 
+/**
+ * A stored bot whose row has no tool list (written before tools existed) gets
+ * the default tools minus the host-reaching ones: parsing fills a missing list
+ * with every default, and no admin ever granted those to this bot.
+ */
+const STORED_FALLBACK_TOOLS = DEFAULT_ASSISTANT.tools.filter((tool) => !HOST_TOOLS.includes(tool))
+
+function storedAssistant(raw: ChannelRow['assistant'], name: string): AssistantConfig | null {
+  if (!raw) return null
+  const record = raw as unknown as Record<string, unknown>
+  return parseAssistantConfig(Array.isArray(record.tools) ? raw : { ...record, tools: STORED_FALLBACK_TOOLS }, name)
+}
+
 function rowToSummary(row: ChannelRow, actor: User): ChannelSummary {
-  const assistant = row.assistant ? parseAssistantConfig(row.assistant, row.name) : null
+  const assistant = storedAssistant(row.assistant, row.name)
   const bot = assistant ? botUserFor(row.channel_url, assistant) : null
 
   const lastMessage: Message | null = row.lm_id
@@ -281,16 +294,22 @@ export class PostgresChatRepository implements ChatRepository {
       )
       if (Number(rows[0]?.n ?? '0') > 0) return
 
+      // All nine or none: after a claim the claimed bots keep `local`'s urls, and
+      // a partial set would be whichever bots the claimant happened to delete.
+      const urls = ROSTER.map((entry) => seedChannelUrl(entry.slug, this.workspaceId))
+      const taken = await tx.query('SELECT 1 FROM channels WHERE channel_url = ANY($1::text[]) LIMIT 1', [urls])
+      if (taken.rows.length > 0) return
+
       for (const entry of ROSTER) {
         const channelUrl = seedChannelUrl(entry.slug, this.workspaceId)
-        const assistant = rosterAssistant(entry)
+        const assistant = starterAssistant(entry, this.scope)
         const bot = botUserFor(channelUrl, assistant)
         const inserted = await tx.query(
           `INSERT INTO channels (channel_url, name, member_count, is_frozen, assistant, workspace_id)
            VALUES ($1, $2, 2, FALSE, $3, $4) ON CONFLICT (channel_url) DO NOTHING RETURNING channel_url`,
           [channelUrl, entry.name, JSON.stringify(assistant), this.workspaceId],
         )
-        // Someone else holds the url: after a claim, the claimed bots keep `local`'s urls.
+        // Belt and braces: the check above already found every url free.
         if (inserted.rows.length === 0) continue
         await tx.query(
           `INSERT INTO messages (channel_url, sender_id, sender_name, body, message_type)
@@ -684,8 +703,17 @@ export class PostgresChatRepository implements ChatRepository {
         [userId],
       )
       if (rows.length === 0) return 'already'
-      await tx.query("UPDATE channels SET workspace_id = $1 WHERE workspace_id = 'local'", [userId])
-      await tx.query("UPDATE skills SET workspace_id = $1 WHERE workspace_id = 'local'", [userId])
+      // They were the local person: what that person had read, they have read.
+      await tx.query(
+        `INSERT INTO read_receipts (channel_url, user_id, read_at)
+         SELECT r.channel_url, $1, r.read_at
+           FROM read_receipts r JOIN channels c ON c.channel_url = r.channel_url
+          WHERE c.workspace_id = $2 AND r.user_id = $3
+         ON CONFLICT (channel_url, user_id) DO UPDATE SET read_at = GREATEST(read_receipts.read_at, EXCLUDED.read_at)`,
+        [userId, LOCAL_SCOPE.workspaceId, LOCAL_SCOPE.actor.userId],
+      )
+      await tx.query('UPDATE channels SET workspace_id = $1 WHERE workspace_id = $2', [userId, LOCAL_SCOPE.workspaceId])
+      await tx.query('UPDATE skills SET workspace_id = $1 WHERE workspace_id = $2', [userId, LOCAL_SCOPE.workspaceId])
       return 'claimed'
     })
   }

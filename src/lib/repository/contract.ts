@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { HOST_TOOLS } from '../domain/assistant'
 import { ROSTER } from '../domain/roster'
 import { isUserMessage } from '../domain/types'
 import { LOCAL_SCOPE, type ChatRepository, type Scope } from './chat-repository'
@@ -132,6 +133,15 @@ export function repositoryContract(label: string, getRepo: (scope?: Scope) => Pr
     assert.equal((await (await getRepo(BOB_IN_ALPHA)).listChannels()).length, ROSTER.length, 'a second person in the same workspace sees the same bots')
   })
 
+  test(`${label}: a team's starter bots have no host-reaching tools until an admin grants them; a personal workspace's keep theirs`, async () => {
+    const hostTools = (channels: { assistant: { tools: string[] } | null }[]) =>
+      channels.flatMap((c) => c.assistant?.tools ?? []).filter((tool) => (HOST_TOOLS as readonly string[]).includes(tool))
+    const team = await (await getRepo({ workspaceId: 'org_fresh', actor: { userId: 'user_max', name: 'Max' } })).listChannels()
+    assert.deepEqual(hostTools(team), [])
+    const own = await (await getRepo({ workspaceId: 'user_solo', actor: { userId: 'user_solo', name: 'Solo' } })).listChannels()
+    assert.ok(hostTools(own).length > 0, 'an owner alone gets the defaults, as in local mode')
+  })
+
   test(`${label}: a workspace can neither see nor touch another workspace's channels`, async () => {
     const alpha = await getRepo(ALICE_IN_ALPHA)
     const beta = await getRepo(BOB_IN_BETA)
@@ -142,6 +152,17 @@ export function repositoryContract(label: string, getRepo: (scope?: Scope) => Pr
     assert.equal(await beta.listMessages(channelUrl), null)
     assert.equal(await beta.getBotSession(channelUrl), null)
     assert.deepEqual(await beta.listScreens(channelUrl), [])
+    // The methods that do nothing on a miss must do nothing here too.
+    await alpha.setBotSession(channelUrl, 'alpha-session', 'ollama')
+    const screen = await alpha.appendScreen({
+      channelUrl, turnId: 't1', step: 1, action: 'open', target: null, intent: null,
+      url: 'https://example.com', title: 'Example', imagePath: '/tmp/alpha.jpg', annotations: [], flagged: false,
+    })
+    await beta.clearBotSession(channelUrl)
+    await beta.attachScreensToMessage(channelUrl, 't1', 1)
+    assert.equal(await beta.getScreenImagePath(channelUrl, screen.screenId), null)
+    assert.equal((await alpha.getBotSession(channelUrl))?.sessionId, 'alpha-session', "beta can't clear alpha's session")
+    assert.equal((await alpha.listScreens(channelUrl))[0]?.messageId, null, "beta can't attach alpha's screens")
     const attempts: (() => Promise<unknown>)[] = [
       () => beta.sendMessage(channelUrl, 'hi'),
       () => beta.appendAssistantMessage(channelUrl, 'hi'),
@@ -209,10 +230,21 @@ export function repositoryContract(label: string, getRepo: (scope?: Scope) => Pr
     const skill = await local.createSkill({ fileName: 'before-sign-in.md', content: 'A document made before anyone signed in.' })
     const aliceHome: Scope = { workspaceId: 'user_alice', actor: { userId: 'user_alice', name: 'Alice' } }
     const alice = await getRepo(aliceHome)
+    const localUrls = (await local.listChannels()).map((c) => c.channelUrl).sort()
+    const localSkills = (await local.listSkillIds()).sort()
     assert.equal(await alice.claimLocalData('user_alice'), 'claimed')
-    assert.ok((await alice.listChannels()).some((c) => c.channelUrl === localUrl))
-    assert.ok((await alice.listSkillIds()).includes(skill.id))
-    assert.equal(await local.getChannel(localUrl), null, 'the claimed bot left the local workspace')
+    const claimed = await alice.listChannels()
+    assert.deepEqual(claimed.map((c) => c.channelUrl).sort(), localUrls, 'every local bot moved, and no starter set was added')
+    assert.ok(localUrls.includes(localUrl))
+    assert.deepEqual((await alice.listSkillIds()).sort(), localSkills, 'every local document moved')
+    assert.ok(localSkills.includes(skill.id))
+    assert.deepEqual(await local.listChannels(), [], 'nothing is left in local')
+    assert.deepEqual(await local.listSkillIds(), [])
+    assert.equal(
+      claimed.reduce((sum, c) => sum + c.unreadMessageCount, 0),
+      0,
+      "what the local person had read, the claimant has read",
+    )
 
     const bob = await getRepo({ workspaceId: 'user_bob', actor: { userId: 'user_bob', name: 'Bob' } })
     assert.equal(await bob.claimLocalData('user_bob'), 'already', 'a second person gets nothing')

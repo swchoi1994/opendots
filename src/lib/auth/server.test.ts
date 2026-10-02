@@ -32,6 +32,24 @@ test('Clerk mode with nobody signed in has no viewer, and requiring one is a 401
   })
 })
 
+test('a claim that fails is tried again on the next personal sign-in, not remembered', async () => {
+  const { memoryRepository } = await import('../repository/memory-store')
+  const original = memoryRepository.claimLocalData
+  let attempts = 0
+  memoryRepository.claimLocalData = async () => {
+    attempts += 1
+    throw new Error('store unavailable')
+  }
+  try {
+    setAuthSourceForTests(async () => ({ userId: 'user_z', orgId: null, isOrgAdmin: false, claims: null }))
+    await assert.rejects(getViewer(CLERK), /store unavailable/)
+    await assert.rejects(getViewer(CLERK), /store unavailable/)
+    assert.equal(attempts, 2)
+  } finally {
+    memoryRepository.claimLocalData = original
+  }
+})
+
 test('the first personal sign-in claims the local bots; a team viewer never does, and nobody claims twice', async () => {
   const { createMemoryRepository, memoryRepository } = await import('../repository/memory-store')
   const localUrl = (await memoryRepository.listChannels())[0]!.channelUrl

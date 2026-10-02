@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto'
 import { removeWorkspace } from '../bots/workspace'
 import { ROSTER } from '../domain/roster'
 import { groupScreensByTurn, screenImageUrl, type Screen } from '../domain/screen'
-import { rosterAssistant } from '../domain/seed'
 import { assertUsableSkill, parseSkillMarkdown, type Skill } from '../domain/skill'
 import type { ChannelSummary, GroupChannel, Message, MessageWithReceipt, User, UserMessage } from '../domain/types'
 import { botUserFor, unreadMemberCount } from '../domain/types'
@@ -20,7 +19,7 @@ import {
   type Deployment,
   type Scope,
 } from './chat-repository'
-import { seedChannelUrl } from './seed-urls'
+import { seedChannelUrl, starterAssistant } from './starter-bots'
 
 /**
  * Bump whenever the Store shape changes.
@@ -118,17 +117,18 @@ function actorUser(scope: Scope): User {
 /**
  * The Postgres store's rule: the first listing in a process seeds the nine
  * starter bots into a workspace that has no channels, each intro already read
- * by the person who listed. A url someone else holds is skipped — after a claim,
- * the claimed bots keep `local`'s urls.
+ * by the person who listed. All nine or none: if any of the urls is held — after
+ * a claim, the claimed bots keep `local`'s urls — the workspace gets none, rather
+ * than whichever bots the claimant happened to delete.
  */
 function seedIfEmpty(current: Store, scope: Scope): void {
   if (current.seeded.has(scope.workspaceId)) return
   current.seeded.add(scope.workspaceId)
   if ([...current.channels.values()].some((channel) => channel.workspaceId === scope.workspaceId)) return
+  if (ROSTER.some((entry) => current.channels.has(seedChannelUrl(entry.slug, scope.workspaceId)))) return
   ROSTER.forEach((entry, index) => {
     const channelUrl = seedChannelUrl(entry.slug, scope.workspaceId)
-    if (current.channels.has(channelUrl)) return
-    const assistant = rosterAssistant(entry)
+    const assistant = starterAssistant(entry, scope)
     const bot = botUserFor(channelUrl, assistant)
     // Slightly in the past, so live messages sort after the intros.
     const createdAt = Date.now() - (60 + index * 7) * 60_000
@@ -460,8 +460,15 @@ export function createMemoryRepository(scope: Scope): ChatRepository {
       const current = store()
       if (current.claims.has('local_data')) return 'already'
       current.claims.set('local_data', userId)
-      for (const channel of current.channels.values()) if (channel.workspaceId === 'local') channel.workspaceId = userId
-      for (const skill of current.skills.values()) if (skill.workspaceId === 'local') skill.workspaceId = userId
+      const localPerson = LOCAL_SCOPE.actor.userId
+      for (const channel of current.channels.values()) {
+        if (channel.workspaceId !== LOCAL_SCOPE.workspaceId) continue
+        channel.workspaceId = userId
+        // They were the local person: what that person had read, they have read.
+        const readAt = channel.readReceipts[localPerson]
+        if (readAt !== undefined) channel.readReceipts[userId] = Math.max(channel.readReceipts[userId] ?? 0, readAt)
+      }
+      for (const skill of current.skills.values()) if (skill.workspaceId === LOCAL_SCOPE.workspaceId) skill.workspaceId = userId
       return 'claimed'
     },
   }
