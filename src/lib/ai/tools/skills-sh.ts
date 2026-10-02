@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { baseEnv } from '../brain-env'
@@ -201,16 +201,24 @@ export async function installSkill(
     const staged = findInstalledSkillMd(stagedSkills, skill, new Map())
     if (!staged) {
       throw new Error(
-        `skills add exited 0 but wrote no new skill under .claude/skills — is "${valid}" already installed?`,
+        `skills add exited 0 but wrote no skill — check that "${valid}" exists on skills.sh.`,
       )
     }
 
-    // Copy (not rename): the temp dir and the workspace can be on different volumes.
+    // Copied next to its destination first (the temp dir and the workspace can
+    // be on different volumes), then swapped in with a rename, so a failed copy
+    // never leaves a re-installed skill half-written or gone.
     const folder = basename(dirname(staged))
     const target = join(workspaceDir, '.claude', 'skills', folder)
+    const incoming = `${target}.incoming-${process.pid}`
     mkdirSync(dirname(target), { recursive: true })
-    rmSync(target, { recursive: true, force: true })
-    cpSync(dirname(staged), target, { recursive: true })
+    try {
+      cpSync(dirname(staged), incoming, { recursive: true })
+      rmSync(target, { recursive: true, force: true })
+      renameSync(incoming, target)
+    } finally {
+      rmSync(incoming, { recursive: true, force: true })
+    }
     return { skill, path: join(target, 'SKILL.md') }
   } finally {
     rmSync(staging, { recursive: true, force: true })

@@ -118,7 +118,7 @@ pnpm eval        # golden set, always in dry-run
 pnpm db:init     # apply migrations now (the app also does this on first use)
 ```
 
-Only one process at a time can open the embedded database. Stop the app before you run `pnpm db:init` against it, and don't run `pnpm dev` and `pnpm start` side by side on the same data directory. `pnpm db:init` refuses to run while the app holds the database, and a second server keeps running but answers every request that needs the database (including `/api/health`, which reports 503) with a message naming the process that holds it.
+Only one process at a time can open the embedded database. Stop the app before you run `pnpm db:init` against it, and don't run `pnpm dev` and `pnpm start` side by side on the same data directory. `pnpm db:init` refuses to run while the app holds the database, and a second server keeps running but its database requests fail; its `/api/health` reports 503 and names the process that holds the database.
 
 ## Architecture
 

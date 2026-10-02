@@ -102,7 +102,7 @@ test('installSkill refuses to report success when the CLI exits 0 without writin
   const silent = async () => ({ code: 0, stdout: 'Skill already installed', stderr: '' })
   await assert.rejects(
     installSkill('vercel-labs/agent-browser@agent-browser', dir, { runner: silent }),
-    /skills add exited 0 but wrote no new skill under \.claude\/skills — is "vercel-labs\/agent-browser@agent-browser" already installed\?/,
+    /skills add exited 0 but wrote no skill — check that "vercel-labs\/agent-browser@agent-browser" exists on skills\.sh/,
   )
 })
 
@@ -126,4 +126,23 @@ test('a bot-written .npmrc or package.json in the workspace never reaches the in
   // npm looks for a project .npmrc by walking up from its cwd; the workspace must not be on that path.
   const rel = relative(dir, cwd)
   assert.ok(rel.startsWith('..') || isAbsolute(rel), `installer cwd ${cwd} must not be inside the workspace`)
+})
+
+test('re-installing a skill replaces it in one step and leaves no temporary folders behind', async (t) => {
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const dir = mkdtempSync(join(tmpdir(), 'opendots-ws-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, '.claude', 'skills', 's'), { recursive: true })
+  writeFileSync(join(dir, '.claude', 'skills', 's', 'SKILL.md'), '# old')
+
+  const runner = async (_cmd: string, _args: string[], opts: { cwd: string }) => {
+    mkdirSync(join(opts.cwd, '.claude', 'skills', 's'), { recursive: true })
+    writeFileSync(join(opts.cwd, '.claude', 'skills', 's', 'SKILL.md'), '# new')
+    return { code: 0, stdout: '', stderr: '' }
+  }
+  const result = await installSkill('o/r@s', dir, { runner })
+  assert.equal(readFileSync(result.path, 'utf8'), '# new')
+  assert.deepEqual(readdirSync(join(dir, '.claude', 'skills')), ['s'], 'no half-copied or backup folder is left next to it')
 })

@@ -76,9 +76,23 @@ function realpathNearest(path: string, hops = 0): string {
  * case-insensitive by default. Elsewhere names compare exactly.
  */
 function sameNameAs(platform: NodeJS.Platform): (segment: string) => string {
-  if (platform === 'win32') return (segment) => fold(segment.replace(/:.*$/, '').replace(/[. ]+$/, ''))
-  if (platform === 'darwin') return fold
+  if (platform === 'win32') return (segment) => fold(unmapSfm(segment).replace(/:.*$/, '').replace(/[. ]+$/, ''))
+  if (platform === 'darwin') return (segment) => fold(unmapSfm(segment))
   return (segment) => segment
+}
+
+/** Characters macOS stores in the U+F0xx private range on exFAT and SMB ("Services for Macintosh"). */
+const SFM_PUNCTUATION: Record<number, string> = {
+  0xf020: '"', 0xf021: '*', 0xf022: ':', 0xf023: '<', 0xf024: '>',
+  0xf025: '?', 0xf026: '\\', 0xf027: '|', 0xf028: ' ', 0xf029: '.',
+}
+
+/** Undoes that mapping, so `CLAUDE\uF029md` is judged as the `CLAUDE.md` exFAT writes. */
+function unmapSfm(segment: string): string {
+  return segment.replace(/[\uF001-\uF029]/g, (char) => {
+    const code = char.charCodeAt(0)
+    return code <= 0xf01f ? String.fromCharCode(code - 0xf000) : SFM_PUNCTUATION[code]!
+  })
 }
 
 /**
@@ -89,7 +103,9 @@ function sameNameAs(platform: NodeJS.Platform): (segment: string) => string {
  * enough. Over-folding can only deny more names, never fewer.
  */
 function fold(segment: string): string {
-  return segment.normalize('NFKD').replace(/\p{M}/gu, '').toUpperCase().toLowerCase()
+  // Default-ignorable code points (zero-width joiners, bidi controls, BOM) are
+  // dropped too: HFS+ ignores them inside names, so `.cl\u200Caude` is `.claude`.
+  return segment.normalize('NFKD').replace(/[\p{M}\p{Default_Ignorable_Code_Point}]/gu, '').toUpperCase().toLowerCase()
 }
 
 /**
@@ -108,6 +124,8 @@ export function isConfigPath(root: string, realPath: string, platform: NodeJS.Pl
   // A `.git` directory makes the folder a repository, and its config can name
   // commands git runs on its own (core.fsmonitor on `git status`).
   if (segments.includes(normal('.git'))) return true
+  // Nor a bare repository anywhere: git won't treat a folder as one without HEAD.
+  if (segments[segments.length - 1] === normal('HEAD')) return true
   const name = segments[segments.length - 1]
   if (name === normal('CLAUDE.md') || name === normal('CLAUDE.local.md')) return true
   return segments.length === 1 && name === normal('.mcp.json')

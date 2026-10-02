@@ -185,3 +185,26 @@ test('a bot cannot turn its workspace into a git repository', (t) => {
   assert.deepEqual(checkWorkspacePath('Read', { file_path: '.git/config' }, ws), allowed)
   assert.deepEqual(checkWorkspacePath('Write', { file_path: 'notes/.gitignore' }, ws), allowed)
 })
+
+test('names that HFS+ or exFAT store as a protected name are denied on darwin', (t) => {
+  const ws = workspace(t)
+  // HFS+ ignores zero-width and bidi format characters inside names.
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: '.cl‌aude/settings.json' }, ws, 'darwin'), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: '.mcp.j﻿son' }, ws, 'darwin'), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'CLAUDE‍.md' }, ws, 'darwin'), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: '.g‪it/config' }, ws, 'darwin'), configDenied)
+  // On exFAT and SMB, macOS stores U+F029 as "." (the Services for Macintosh mapping).
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'claude/settings.json' }, ws, 'darwin'), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'CLAUDEmd' }, ws, 'darwin'), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'git/config' }, ws, 'win32'), configDenied)
+})
+
+test('a bot cannot make any folder of its workspace a bare git repository', (t) => {
+  const ws = workspace(t)
+  // git treats a folder holding HEAD, config, objects/ and refs/ as a repository.
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'HEAD' }, ws), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'notes/HEAD' }, ws), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'head' }, ws, 'darwin'), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'HEADER.md' }, ws), allowed)
+  assert.deepEqual(checkWorkspacePath('Read', { file_path: 'HEAD' }, ws), allowed)
+})
