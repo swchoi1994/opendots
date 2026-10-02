@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { BotAvatar } from './BotAvatar'
 import { CloseIcon, TrashIcon } from './icons'
+import { useViewer } from './ViewerContext'
+import { canToggleTool, type Role } from '@/lib/auth/viewer'
 import {
   DEFAULT_ASSISTANT,
   DEFAULT_GUARDRAILS,
@@ -134,17 +136,23 @@ export function ModelSelect({
   )
 }
 
+/** The tools a new bot starts with: the defaults this person may grant (members can't grant host-reaching ones). */
+function startingTools(role: Role): ToolName[] {
+  return DEFAULT_ASSISTANT.tools.filter((tool) => canToggleTool(role, tool, false))
+}
+
 /**
  * Bot creation: a bot is configured up front with its name, avatar, the model
  * that answers, the role prompt that shapes it, and which tools it may use.
  */
 export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
+  const { role } = useViewer()
   const [name, setName] = useState('')
   const [avatar, setAvatar] = useState<BotAvatarModel>(avatarFromName(''))
   const [avatarTouched, setAvatarTouched] = useState(false)
   const [model, setModel] = useState(DEFAULT_ASSISTANT.model)
   const [systemMessage, setSystemMessage] = useState(DEFAULT_ASSISTANT.systemMessage)
-  const [tools, setTools] = useState<ToolName[]>(DEFAULT_ASSISTANT.tools)
+  const [tools, setTools] = useState<ToolName[]>(() => startingTools(role))
   const [memoryEnabled, setMemoryEnabled] = useState(DEFAULT_MEMORY.enabled)
   const [memoryWindow, setMemoryWindow] = useState(DEFAULT_MEMORY.windowMessages)
   const [guardrailsEnabled, setGuardrailsEnabled] = useState(DEFAULT_GUARDRAILS.enabled)
@@ -218,7 +226,9 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
 
   async function removeSkill(skillId: string) {
     setSkills((current) => current.filter((skill) => skill.id !== skillId))
-    // Best-effort cleanup; the bot simply will not reference it.
+    // Best-effort cleanup; the bot simply will not reference it. Deleting a
+    // workspace document is for admins, so a member's upload just stays put.
+    if (role !== 'admin') return
     await fetch(`/api/skills/${skillId}`, { method: 'DELETE' }).catch(() => undefined)
   }
 
@@ -228,7 +238,7 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
     setAvatarTouched(false)
     setModel(DEFAULT_ASSISTANT.model)
     setSystemMessage(DEFAULT_ASSISTANT.systemMessage)
-    setTools(DEFAULT_ASSISTANT.tools)
+    setTools(startingTools(role))
     setMemoryEnabled(DEFAULT_MEMORY.enabled)
     setMemoryWindow(DEFAULT_MEMORY.windowMessages)
     setGuardrailsEnabled(DEFAULT_GUARDRAILS.enabled)
@@ -339,33 +349,39 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
 
             <fieldset className="flex flex-col gap-1.5">
               <legend className="mb-1 text-[12px] font-semibold text-ink-700">Tools</legend>
-              {TOOL_CATALOG.map((tool) => (
-                <label
-                  key={tool.id}
-                  className={`flex items-start gap-2.5 rounded-lg border border-line px-3 py-2 ${tool.available ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={tools.includes(tool.id)}
-                    disabled={!tool.available}
-                    onChange={() => toggleTool(tool.id)}
-                    className="mt-0.5 accent-ink-900"
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1.5">
-                      <span className="block text-[13px] text-ink-900">{tool.label}</span>
-                      {!tool.available && (
-                        <span className="rounded-full bg-surface px-1.5 py-0.5 text-[10px] font-medium text-ink-500">
-                          coming soon
-                        </span>
-                      )}
+              {TOOL_CATALOG.map((tool) => {
+                // A new bot has nothing yet, so every tool it starts with is one being granted.
+                const allowed = canToggleTool(role, tool.id, false)
+                const enabled = tool.available && allowed
+                return (
+                  <label
+                    key={tool.id}
+                    title={allowed ? undefined : 'Only workspace admins can turn this on'}
+                    className={`flex items-start gap-2.5 rounded-lg border border-line px-3 py-2 ${enabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={tools.includes(tool.id)}
+                      disabled={!enabled}
+                      onChange={() => toggleTool(tool.id)}
+                      className="mt-0.5 accent-ink-900"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5">
+                        <span className="block text-[13px] text-ink-900">{tool.label}</span>
+                        {!tool.available && (
+                          <span className="rounded-full bg-surface px-1.5 py-0.5 text-[10px] font-medium text-ink-500">
+                            coming soon
+                          </span>
+                        )}
+                      </span>
+                      <span className="block text-[11px] leading-snug text-ink-500">
+                        {tool.description}
+                      </span>
                     </span>
-                    <span className="block text-[11px] leading-snug text-ink-500">
-                      {tool.description}
-                    </span>
-                  </span>
-                </label>
-              ))}
+                  </label>
+                )
+              })}
               {shellBrowserWarning(tools) && (
                 <p role="alert" className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
                   {shellBrowserWarning(tools)}

@@ -10,8 +10,6 @@
 
 import type { AssistantConfig } from './assistant'
 
-export const CURRENT_USER_ID = 'user_me'
-
 /** The bot's own identity as a message sender. One per bot channel. */
 export function botUserFor(
   channelUrl: string,

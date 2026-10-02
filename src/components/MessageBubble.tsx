@@ -1,11 +1,8 @@
 import { ImagePlaceholderIcon, ReadReceiptIcon, SentReceiptIcon } from './icons'
 import { MessageMarkdown } from './MessageMarkdown'
 import { ScreenStrip } from './ScreenStrip'
-import {
-  CURRENT_USER_ID,
-  type MessageProvenance,
-  type MessageWithReceipt,
-} from '@/lib/domain/types'
+import { useViewer } from './ViewerContext'
+import type { MessageProvenance, MessageWithReceipt } from '@/lib/domain/types'
 import { isUserMessage } from '@/lib/domain/types'
 import { formatTime } from '@/lib/format'
 import type { Screen } from '@/lib/domain/screen'
@@ -67,7 +64,7 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ entry, screens = [], onOpenScreen }: MessageBubbleProps) {
   const { message, unreadMemberCount } = entry
-  const isOwn = message.sender.userId === CURRENT_USER_ID
+  const isOwn = message.sender.userId === useViewer().userId
   const time = formatTime(message.createdAt)
   const isRead = unreadMemberCount === 0
 

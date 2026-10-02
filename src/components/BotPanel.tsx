@@ -5,6 +5,9 @@ import { AvatarPicker, ModelSelect } from './NewBotDialog'
 import { BotAvatar } from './BotAvatar'
 import { CloseIcon } from './icons'
 import { ScreenPanel } from './ScreenPanel'
+import { useViewer } from './ViewerContext'
+import { canToggleTool } from '@/lib/auth/viewer'
+import { readError } from '@/lib/client-errors'
 import {
   DEFAULT_ASSISTANT,
   TOOL_CATALOG,
@@ -67,6 +70,7 @@ export function BotPanel({
   onToggleHeaded,
 }: BotPanelProps) {
   const assistant = channel.assistant
+  const { role } = useViewer()
   const [isEditing, setIsEditing] = useState(false)
   const [name, setName] = useState(assistant?.name ?? channel.name)
   const [avatar, setAvatar] = useState<BotAvatarModel>(assistant?.avatar ?? DEFAULT_ASSISTANT.avatar)
@@ -129,7 +133,8 @@ export function BotPanel({
       })
 
       if (!response.ok) {
-        setError('Could not save configuration')
+        // The server's reason, e.g. that only admins may turn a tool on.
+        setError(await readError(response, 'Could not save configuration'))
         return
       }
 
@@ -239,20 +244,22 @@ export function BotPanel({
               </p>
             </div>
 
-            <div className="mt-5 border-t border-line pt-3">
-              <button
-                type="button"
-                onClick={handleDeleteClick}
-                onBlur={() => setConfirmingDelete(false)}
-                className={`w-full cursor-pointer rounded-xl px-3 py-2 text-[13px] font-semibold transition-colors ${
-                  confirmingDelete
-                    ? 'bg-rose-600 text-white hover:bg-rose-700'
-                    : 'text-rose-600 hover:bg-rose-50'
-                }`}
-              >
-                {confirmingDelete ? 'Really delete?' : 'Delete bot'}
-              </button>
-            </div>
+            {role === 'admin' && (
+              <div className="mt-5 border-t border-line pt-3">
+                <button
+                  type="button"
+                  onClick={handleDeleteClick}
+                  onBlur={() => setConfirmingDelete(false)}
+                  className={`w-full cursor-pointer rounded-xl px-3 py-2 text-[13px] font-semibold transition-colors ${
+                    confirmingDelete
+                      ? 'bg-rose-600 text-white hover:bg-rose-700'
+                      : 'text-rose-600 hover:bg-rose-50'
+                  }`}
+                >
+                  {confirmingDelete ? 'Really delete?' : 'Delete bot'}
+                </button>
+              </div>
+            )}
           </section>
         ) : (
           <form onSubmit={handleSave} className="flex flex-col gap-3">
@@ -289,26 +296,32 @@ export function BotPanel({
 
             <fieldset className="flex flex-col gap-1.5">
               <legend className="mb-1 text-[12px] font-semibold text-ink-700">Tools</legend>
-              {TOOL_CATALOG.map((tool) => (
-                <label
-                  key={tool.id}
-                  className={`flex items-center gap-2 text-[12px] ${tool.available ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={tools.includes(tool.id)}
-                    disabled={!tool.available}
-                    onChange={() => toggleTool(tool.id)}
-                    className="accent-ink-900"
-                  />
-                  {tool.label}
-                  {!tool.available && (
-                    <span className="rounded-full bg-surface px-1.5 py-0.5 text-[10px] font-medium text-ink-500">
-                      coming soon
-                    </span>
-                  )}
-                </label>
-              ))}
+              {TOOL_CATALOG.map((tool) => {
+                // Measured against the saved bot, as the server does: a member may untick a granted tool and tick it back.
+                const allowed = canToggleTool(role, tool.id, assistant.tools.includes(tool.id))
+                const enabled = tool.available && allowed
+                return (
+                  <label
+                    key={tool.id}
+                    title={allowed ? undefined : 'Only workspace admins can turn this on'}
+                    className={`flex items-center gap-2 text-[12px] ${enabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={tools.includes(tool.id)}
+                      disabled={!enabled}
+                      onChange={() => toggleTool(tool.id)}
+                      className="accent-ink-900"
+                    />
+                    {tool.label}
+                    {!tool.available && (
+                      <span className="rounded-full bg-surface px-1.5 py-0.5 text-[10px] font-medium text-ink-500">
+                        coming soon
+                      </span>
+                    )}
+                  </label>
+                )
+              })}
               {shellBrowserWarning(tools) && (
                 <p role="alert" className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
                   {shellBrowserWarning(tools)}

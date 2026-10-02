@@ -1,11 +1,15 @@
 'use client'
 
+import dynamic from 'next/dynamic'
 import { useState } from 'react'
 import { Avatar } from './Avatar'
 import { BotListItem } from './BotListItem'
 import { PlugIcon, PlusIcon, SearchIcon } from './icons'
-import { me } from '@/lib/domain/seed'
+import { useViewer } from './ViewerContext'
 import type { ChannelSummary } from '@/lib/domain/types'
+
+/** Loaded only when sign-in is on; the placeholder keeps the footer from jumping. */
+const ClerkAccount = dynamic(() => import('./ClerkAccount'), { ssr: false, loading: () => <div className="h-11" /> })
 
 interface BotListProps {
   channels: ChannelSummary[]
@@ -17,6 +21,7 @@ interface BotListProps {
 }
 
 export function BotList({ channels, selectedUrl, isLoading, onSelect, onNewBot, onDelete }: BotListProps) {
+  const viewer = useViewer()
   const [confirmingUrl, setConfirmingUrl] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
   const visible = filter.trim()
@@ -60,6 +65,7 @@ export function BotList({ channels, selectedUrl, isLoading, onSelect, onNewBot, 
               channel={channel}
               isSelected={channel.channelUrl === selectedUrl}
               isConfirmingDelete={confirmingUrl === channel.channelUrl}
+              canDelete={viewer.role === 'admin'}
               onSelect={onSelect}
               onRequestDelete={setConfirmingUrl}
               onCancelDelete={() => setConfirmingUrl(null)}
@@ -82,10 +88,14 @@ export function BotList({ channels, selectedUrl, isLoading, onSelect, onNewBot, 
           <PlugIcon className="h-5 w-5" />
           Plugins
         </button>
-        <div className="flex items-center gap-3 px-2.5 py-2 text-[14px] text-ink-900">
-          <Avatar user={me} size={28} />
-          {me.nickname}
-        </div>
+        {viewer.clerk ? (
+          <ClerkAccount />
+        ) : (
+          <div className="flex items-center gap-3 px-2.5 py-2 text-[14px] text-ink-900">
+            <Avatar user={{ userId: viewer.userId, nickname: viewer.name, colorToken: 'violet' }} size={28} />
+            {viewer.name}
+          </div>
+        )}
       </footer>
     </aside>
   )

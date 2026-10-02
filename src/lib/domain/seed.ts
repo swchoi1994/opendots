@@ -1,9 +1,6 @@
 import { DEFAULT_ASSISTANT, type AssistantConfig } from './assistant'
 import { ROSTER } from './roster'
 import type { User } from './types'
-import { CURRENT_USER_ID } from './types'
-
-export const me: User = { userId: CURRENT_USER_ID, nickname: 'You', colorToken: 'violet' }
 
 /**
  * Legacy sender for rows written before bots had names. Postgres rows with

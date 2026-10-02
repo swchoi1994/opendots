@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AssistantConfig } from '@/lib/domain/assistant'
 import type { Screen, ScreenFrame } from '@/lib/domain/screen'
 import type { ChannelSummary, MessageProvenance, MessageWithReceipt } from '@/lib/domain/types'
+import { readError } from '@/lib/client-errors'
 
 export interface ToolActivityState {
   /** SDK tool name, e.g. `mcp__opendots__search_knowledge` or `Read`. */
@@ -73,14 +74,6 @@ interface Thread {
   messages: MessageWithReceipt[]
 }
 
-async function readError(response: Response, fallback: string): Promise<string> {
-  try {
-    const body = (await response.json()) as { error?: string }
-    return body.error ?? fallback
-  } catch {
-    return fallback
-  }
-}
 
 export function useChat() {
   const [channels, setChannels] = useState<ChannelSummary[]>([])

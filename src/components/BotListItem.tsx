@@ -15,6 +15,8 @@ interface BotListItemProps {
   channel: ChannelSummary
   isSelected: boolean
   isConfirmingDelete: boolean
+  /** Deleting a bot is for workspace admins; members don't get the button. */
+  canDelete: boolean
   onSelect: (channelUrl: string) => void
   onRequestDelete: (channelUrl: string) => void
   onCancelDelete: () => void
@@ -22,7 +24,7 @@ interface BotListItemProps {
 }
 
 export function BotListItem({
-  channel, isSelected, isConfirmingDelete, onSelect, onRequestDelete, onCancelDelete, onConfirmDelete,
+  channel, isSelected, isConfirmingDelete, canDelete, onSelect, onRequestDelete, onCancelDelete, onConfirmDelete,
 }: BotListItemProps) {
   const avatar = channel.assistant?.avatar ?? avatarFromName(channel.name)
   const timestamp = formatChannelTimestamp(channel.lastMessage?.createdAt ?? channel.createdAt)
@@ -56,7 +58,7 @@ export function BotListItem({
         </span>
       </button>
 
-      {isConfirmingDelete ? (
+      {!canDelete ? null : isConfirmingDelete ? (
         <span className="absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-1 rounded-full bg-white p-0.5 shadow-sm ring-1 ring-line">
           <button type="button" onClick={() => onConfirmDelete(channel.channelUrl)} aria-label={`Confirm delete ${channel.name}`} className="cursor-pointer rounded-full bg-rose-600 p-1 text-white hover:bg-rose-700">
             <CheckIcon className="h-3.5 w-3.5" />
