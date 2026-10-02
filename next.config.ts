@@ -11,11 +11,12 @@ function sdkVersion(): string {
 }
 
 const nextConfig: NextConfig = {
-  // Give the proxy the request's own URL. Otherwise Next rebuilds it as
-  // http://localhost:<port> even when serving on 127.0.0.1, and Clerk's
-  // middleware, which re-points each request at that URL, makes Next treat it
-  // as another site and proxy the request to itself in a loop (every Clerk-mode
-  // request a 500). Normalising only matters for Pages Router data routes.
+  // Give the proxy the request's own URL. Otherwise Next's URL class turns a
+  // loopback host into `localhost`, and Clerk's middleware, which re-points
+  // each request at that URL, makes Next treat it as another site and proxy the
+  // request to itself in a loop (every Clerk-mode request a 500 on 127.0.0.1).
+  // The cost: the proxy now sees `/_next/data/<build>/…` paths unstripped, so
+  // the request guard judges cross-site writes on every path, not just /api.
   skipProxyUrlNormalize: true,
   // Pin file tracing to this directory. Without it, Next walks up and finds the
   // sibling monorepo lockfiles under ~/Documents and infers the wrong root.

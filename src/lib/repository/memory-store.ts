@@ -467,6 +467,10 @@ export function createMemoryRepository(scope: Scope): ChatRepository {
         // They were the local person: what that person had read, they have read.
         const readAt = channel.readReceipts[localPerson]
         if (readAt !== undefined) channel.readReceipts[userId] = Math.max(channel.readReceipts[userId] ?? 0, readAt)
+        // And what they sent is theirs. In place, so lastMessage, the same object, follows.
+        for (const message of current.messages.get(channel.channelUrl) ?? []) {
+          if (message.sender.userId === localPerson) message.sender = { ...message.sender, userId }
+        }
       }
       for (const skill of current.skills.values()) if (skill.workspaceId === LOCAL_SCOPE.workspaceId) skill.workspaceId = userId
       return 'claimed'

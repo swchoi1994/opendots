@@ -64,9 +64,12 @@ test('GETs are not subject to the cross-site rule', () => {
   assert.deepEqual(checkRequest({ ...get('/api/health'), method: 'HEAD' }, []), { ok: true })
 })
 
-test('pages outside /api are only held to the Host rule', () => {
-  assert.deepEqual(checkRequest(post('/app/0123456789abcdef', { origin: 'https://evil.example' }), []), { ok: true })
-  assert.equal(checkRequest(post('/app/0123456789abcdef', { host: 'evil.example' }), []).ok, false)
+test('a request that changes something is refused from another site whatever its path', () => {
+  // Next routes /_next/data/<build>/api/….json to the API route itself.
+  for (const path of ['/app/0123456789abcdef', '/_next/data/BUILD/api/channels/bot_x/messages.json', '/']) {
+    assert.equal(checkRequest(post(path, { origin: 'https://evil.example' }), []).ok, false, path)
+  }
+  assert.deepEqual(checkRequest(get('/app/0123456789abcdef', { origin: 'https://evil.example' }), []), { ok: true }, 'following a link from another site still works')
 })
 
 test('the container healthcheck request passes', () => {

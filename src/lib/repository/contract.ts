@@ -230,6 +230,7 @@ export function repositoryContract(label: string, getRepo: (scope?: Scope) => Pr
     const skill = await local.createSkill({ fileName: 'before-sign-in.md', content: 'A document made before anyone signed in.' })
     const aliceHome: Scope = { workspaceId: 'user_alice', actor: { userId: 'user_alice', name: 'Alice' } }
     const alice = await getRepo(aliceHome)
+    await local.sendMessage(localUrl, 'written before sign-in')
     const localUrls = (await local.listChannels()).map((c) => c.channelUrl).sort()
     const localSkills = (await local.listSkillIds()).sort()
     assert.equal(await alice.claimLocalData('user_alice'), 'claimed')
@@ -238,6 +239,8 @@ export function repositoryContract(label: string, getRepo: (scope?: Scope) => Pr
     assert.ok(localUrls.includes(localUrl))
     assert.deepEqual((await alice.listSkillIds()).sort(), localSkills, 'every local document moved')
     assert.ok(localSkills.includes(skill.id))
+    const before = (await alice.listMessages(localUrl))!.find((m) => isUserMessage(m.message) && m.message.message === 'written before sign-in')
+    assert.equal(before?.message.sender.userId, 'user_alice', 'what the local person sent is now the claimant\'s')
     assert.deepEqual(await local.listChannels(), [], 'nothing is left in local')
     assert.deepEqual(await local.listSkillIds(), [])
     assert.equal(

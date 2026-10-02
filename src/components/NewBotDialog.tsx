@@ -22,7 +22,8 @@ import type { Skill } from '@/lib/domain/skill'
 interface NewBotDialogProps {
   open: boolean
   onClose: () => void
-  onCreate: (name: string, assistant: AssistantConfig) => Promise<void>
+  /** Resolves to why creation failed, or null once the bot exists. */
+  onCreate: (name: string, assistant: AssistantConfig) => Promise<string | null>
 }
 
 /** Shared with `BotPanel.tsx`, which imports it from here. */
@@ -160,6 +161,7 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [createError, setCreateError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   function handleNameChange(next: string) {
@@ -253,7 +255,8 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
 
     setIsSubmitting(true)
     try {
-      await onCreate(name.trim(), {
+      setCreateError(null)
+      const failure = await onCreate(name.trim(), {
         model: resolvedModel,
         name: name.trim(),
         avatar,
@@ -264,6 +267,10 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
         skillIds: skills.map((skill) => skill.id),
         browser: DEFAULT_ASSISTANT.browser,
       })
+      if (failure) {
+        setCreateError(failure)
+        return
+      }
       resetState()
       onClose()
     } finally {
@@ -498,6 +505,13 @@ export function NewBotDialog({ open, onClose, onCreate }: NewBotDialogProps) {
                 </ul>
               )}
             </fieldset>
+
+            {createError && (
+              // The server's reason, e.g. that only admins may turn a tool on; the form stays as typed.
+              <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
+                {createError}
+              </p>
+            )}
 
             <div className="flex justify-end gap-2 pt-1">
               <button

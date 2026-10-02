@@ -308,7 +308,8 @@ export function useChat() {
     [selectedUrl, refresh],
   )
 
-  const createChannel = useCallback(async (name: string, assistant: AssistantConfig) => {
+  /** Creates a bot; resolves to the reason it failed, or null, so the dialog can stay open and say why. */
+  const createChannel = useCallback(async (name: string, assistant: AssistantConfig): Promise<string | null> => {
     try {
       const response = await fetch('/api/channels', {
         method: 'POST',
@@ -316,17 +317,15 @@ export function useChat() {
         body: JSON.stringify({ name, assistant }),
       })
 
-      if (!response.ok) {
-        setError(await readError(response, 'Could not create conversation'))
-        return
-      }
+      if (!response.ok) return await readError(response, 'Could not create conversation')
 
       const { channel } = (await response.json()) as { channel: ChannelSummary }
       setChannels((current) => [channel, ...current])
       setSelectedUrl(channel.channelUrl)
       setError(null)
+      return null
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not create conversation')
+      return cause instanceof Error ? cause.message : 'Could not create conversation'
     }
   }, [])
 

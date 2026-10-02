@@ -28,6 +28,14 @@ test('the proxy answers 403 to a cross-site POST and lets a same-origin one thro
   assert.equal(allowed.headers.get('x-middleware-next'), '1', 'NextResponse.next() hands the request on')
 })
 
+test("the proxy answers 403 to a cross-site POST through Next's data-route path to the API", () => {
+  const blocked = guard(request('http://127.0.0.1:3000/_next/data/BUILD/api/channels/bot_chief-of-staff/messages.json', {
+    method: 'POST',
+    headers: { host: '127.0.0.1:3000', origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' },
+  }))
+  assert.equal(blocked.status, 403)
+})
+
 test('the proxy answers 403 to a foreign Host', () => {
   const blocked = guard(request('http://evil.example:3000/api/channels', { headers: { host: 'evil.example:3000' } }))
   assert.equal(blocked.status, 403)

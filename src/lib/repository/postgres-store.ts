@@ -712,6 +712,12 @@ export class PostgresChatRepository implements ChatRepository {
          ON CONFLICT (channel_url, user_id) DO UPDATE SET read_at = GREATEST(read_receipts.read_at, EXCLUDED.read_at)`,
         [userId, LOCAL_SCOPE.workspaceId, LOCAL_SCOPE.actor.userId],
       )
+      // And what they sent is theirs.
+      await tx.query(
+        `UPDATE messages SET sender_id = $1
+          WHERE sender_id = $3 AND channel_url IN (SELECT channel_url FROM channels WHERE workspace_id = $2)`,
+        [userId, LOCAL_SCOPE.workspaceId, LOCAL_SCOPE.actor.userId],
+      )
       await tx.query('UPDATE channels SET workspace_id = $1 WHERE workspace_id = $2', [userId, LOCAL_SCOPE.workspaceId])
       await tx.query('UPDATE skills SET workspace_id = $1 WHERE workspace_id = $2', [userId, LOCAL_SCOPE.workspaceId])
       return 'claimed'
