@@ -63,7 +63,7 @@ export interface Viewer {
 `viewerFromAuth(auth)` is a pure function over `{ userId, orgId, isAdmin, claims }`:
 - A personal workspace is the user's own id, with role `admin`.
 - An organization is `orgId`, with role `admin` when `has({ role: 'org:admin' })`, otherwise `member`.
-- The name comes from the `name` claim, falling back to the user id. The picture comes from the `image` claim, or `null`.
+- The name comes from the `name` claim. Clerk renders an unset full name as an empty string, so the name falls back to the local part of the `email` claim, then to "Someone"; a raw user id is never shown. The picture comes from the `image` claim, or `null`.
 
 `getViewer()` (server-only) returns the local viewer in local mode. In Clerk mode it calls `auth()` and returns `null` when the visitor isn't signed in. It doesn't call `currentUser()`: the session claims carry name and picture.
 
@@ -76,12 +76,12 @@ Migration `db/005_workspaces.sql`:
 
 Rows that exist today stay in `local`. Messages, read receipts, sessions, screens and deployments hang off a channel, so they follow its workspace. Messages already store `sender_id` and `sender_name`; read receipts already store `user_id`.
 
-**Repository scope.** Every `ChatRepository` method takes a leading `scope: { workspaceId: string; viewer: { userId: string; name: string } }` argument:
+**Repository scope.** A repository instance is bound to a `Scope = { workspaceId: string; actor: { userId: string; name: string } }`: `getRepository(scope)` builds one per request, and `LOCAL_SCOPE` (`local`, `user_me`/"You") is the default. Method signatures don't change:
 - **Listing:** `listChannels`, `listSkills` and `listSkillIds` return only the scope's workspace.
 - **Creating:** `createChannel` and `createSkill` create in the scope's workspace.
 - **Every method naming a channel or skill:** a channel or skill outside the workspace is reported exactly like a missing one (`CHANNEL_NOT_FOUND` / `SKILL_NOT_FOUND`, 404). Nothing reveals that another workspace's channel exists.
-- **Identity:** `sendMessage` records `scope.viewer` as the sender, and read receipts are per `scope.viewer.userId`.
-- **Seeding:** the nine starter bots are seeded per workspace, the first time `listChannels` finds the workspace empty. Seeded channel URLs are `bot_<slug>` in `local` (A's URLs, unchanged) and `bot_<slug>_<8 hex of sha256(workspaceId)>` elsewhere, because channel URLs are unique across the whole instance.
+- **Identity:** `sendMessage` records `scope.actor` as the sender, and read receipts are per `scope.actor.userId`. A person with no receipt in a channel has every message they didn't send unread.
+- **Seeding:** the nine starter bots are seeded per workspace, the first time in a process that `listChannels` finds the workspace empty; deleting a bot or all bots lets the next listing look again. A seed URL that is already taken is skipped (after a claim, the claimed bots keep `local`'s URLs, so a later `local` listing finds them taken). Seeded channel URLs are `bot_<slug>` in `local` (A's URLs, unchanged) and `bot_<slug>_<8 hex of sha256(workspaceId)>` elsewhere, because channel URLs are unique across the whole instance.
 - **Turn context:** `loadTurnContext` and the respond route use the scope too, so a bot's transcript shows each person's real name.
 
 **Share-link (deployment) routes** look the channel up by deployment id. `getDeployment` stays unscoped and its result gains the channel's `workspaceId`. They then act in that workspace with a visitor viewer, `{ userId: 'visitor_<deploymentId>', name: 'Visitor' }`, so a visitor's messages are attributed to "Visitor". The passcode check stays the gate, and visitors stay restricted (§8).
