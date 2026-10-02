@@ -9,10 +9,15 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/i
+/**
+ * The loopback names the request guard answers to (src/lib/request-guard.ts),
+ * so a server started here never refuses its own address. `::1` is how -H
+ * spells what the Host header writes as `[::1]`.
+ */
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
 
 export function isLoopback(host) {
-  return LOOPBACK.test(host)
+  return LOOPBACK.has(host.toLowerCase())
 }
 
 /** Mirrors authMode() in src/lib/auth/viewer.ts; start.test.mjs holds them to the same answers. */

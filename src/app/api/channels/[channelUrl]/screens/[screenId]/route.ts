@@ -27,7 +27,9 @@ export async function GET(_request: Request, { params }: RouteContext) {
       headers: {
         'content-type': 'image/jpeg',
         'content-length': String(size),
-        'cache-control': 'private, max-age=31536000, immutable',
+        // Every view passes the workspace or passcode check: a cached frame would
+        // outlive a sign-out or a workspace switch in a shared browser.
+        'cache-control': 'private, no-store',
       },
     })
   })
