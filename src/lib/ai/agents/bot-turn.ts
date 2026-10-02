@@ -1,4 +1,5 @@
 import type { AssistantConfig, ToolName } from '../../domain/assistant'
+import type { ChatRepository } from '../../repository/chat-repository'
 import { getAiConfig } from '../config'
 import { getRetriever, type RetrievedChunk } from '../rag/retriever'
 import { toolGrants, type ToolGrants } from '../tools/grants'
@@ -38,6 +39,8 @@ export interface PlanBotTurnInput {
   bot: AssistantConfig
   /** Null means every uploaded document; an array scopes to those ids. */
   skillIds: string[] | null
+  /** The turn's workspace store: its documents are the ones searched. Defaults to the local workspace's. */
+  repo?: ChatRepository
   /** True when an SDK session will be resumed, so history need not be replayed. */
   hasSession: boolean
   /**
@@ -109,7 +112,7 @@ export async function planBotTurn(input: PlanBotTurnInput): Promise<BotTurnPlan>
 
   let context: RetrievedChunk[] = []
   if (tools.includes('rag_search')) {
-    const retriever = await getRetriever(config)
+    const retriever = await getRetriever(config, input.repo)
     context = await retriever.retrieve(input.question, { skillIds: input.skillIds ?? undefined })
     trace.push({ node, detail: `rag_search via ${config.rag.vectorStore}: ${context.length} passage(s)` })
   } else if (bot.tools.includes('rag_search') && !config.rag.enabled) {

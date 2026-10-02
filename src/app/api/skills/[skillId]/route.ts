@@ -1,21 +1,17 @@
 import { NextResponse } from 'next/server'
-import { RepositoryError } from '@/lib/repository/chat-repository'
-import { getRepository } from '@/lib/repository'
+import { assertAdmin } from '@/lib/auth/viewer'
+import { asViewer } from '@/lib/http/as-viewer'
 
 interface RouteContext {
   params: Promise<{ skillId: string }>
 }
 
+/** Removes a knowledge document from the workspace. Every bot that searched it loses it, so admins only. */
 export async function DELETE(_request: Request, { params }: RouteContext) {
-  const { skillId } = await params
-
-  try {
-    await getRepository().deleteSkill(skillId)
+  return asViewer(async ({ viewer, repo }) => {
+    const { skillId } = await params
+    assertAdmin(viewer, 'delete a document')
+    await repo.deleteSkill(skillId)
     return NextResponse.json({ deleted: skillId })
-  } catch (error) {
-    if (error instanceof RepositoryError) {
-      return NextResponse.json({ error: error.message, code: error.code }, { status: error.status })
-    }
-    throw error
-  }
+  })
 }

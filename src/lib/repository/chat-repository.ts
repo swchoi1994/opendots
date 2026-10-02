@@ -48,6 +48,14 @@ export interface Deployment {
   allowPosting: boolean
 }
 
+/**
+ * A share link acts in its channel's workspace as an anonymous visitor, one per
+ * link, so a visitor's messages read "Visitor" and never pass for the owner's.
+ */
+export function visitorScope(deployment: Deployment): Scope {
+  return { workspaceId: deployment.workspaceId, actor: { userId: `visitor_${deployment.id}`, name: 'Visitor' } }
+}
+
 export const DeploymentNotFound = (deploymentId: string) =>
   new RepositoryError(`No deployment with id "${deploymentId}"`, 404, 'DEPLOYMENT_NOT_FOUND')
 
@@ -70,6 +78,9 @@ export interface CreateChannelInput {
  * datastore later is a one-module change with no reach into the UI or routes.
  */
 export interface ChatRepository {
+  /** The workspace this instance sees and the person it acts as. */
+  readonly scope: Scope
+
   listChannels(): Promise<ChannelSummary[]>
   getChannel(channelUrl: string): Promise<ChannelSummary | null>
   listMessages(channelUrl: string): Promise<MessageWithReceipt[] | null>

@@ -4,6 +4,7 @@ import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { cookieNameFor, verifySession } from '@/lib/deployment-session'
 import { getRepository } from '@/lib/repository'
+import { visitorScope } from '@/lib/repository/chat-repository'
 
 interface RouteContext {
   params: Promise<{ deploymentId: string; screenId: string }>
@@ -32,11 +33,14 @@ export async function GET(_request: Request, { params }: RouteContext) {
     return NextResponse.json({ error: 'Locked', code: 'LOCKED' }, { status: 401 })
   }
 
+  // The channel's workspace, acting as this link's visitor: never the owner.
+  const repo = getRepository(visitorScope(deployment))
+
   const id = Number.parseInt(screenId, 10)
   if (!Number.isFinite(id)) {
     return NextResponse.json({ error: 'Bad screen id', code: 'INVALID_ID' }, { status: 400 })
   }
-  const path = await getRepository().getScreenImagePath(deployment.channelUrl, id, { attachedOnly: true })
+  const path = await repo.getScreenImagePath(deployment.channelUrl, id, { attachedOnly: true })
   if (!path) return NextResponse.json({ error: 'No such screen', code: 'SCREEN_NOT_FOUND' }, { status: 404 })
   let size: number
   try {

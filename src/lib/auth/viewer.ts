@@ -1,5 +1,5 @@
-import { HOST_TOOLS, type ToolName } from '../domain/assistant'
-import { RepositoryError } from '../repository/chat-repository'
+import { DEFAULT_BROWSER, HOST_TOOLS, type AssistantConfig, type ToolName } from '../domain/assistant'
+import { RepositoryError, type Scope } from '../repository/chat-repository'
 
 /**
  * Who is acting, and in which workspace.
@@ -63,11 +63,21 @@ export function viewerFromAuth(facts: AuthFacts): Viewer | null {
   return { userId: facts.userId, name, imageUrl, workspaceId: facts.orgId, role: facts.isOrgAdmin ? 'admin' : 'member' }
 }
 
+/** The repository scope a viewer acts in: their workspace, as themselves. */
+export function scopeFor(viewer: Viewer): Scope {
+  return { workspaceId: viewer.workspaceId, actor: { userId: viewer.userId, name: viewer.name } }
+}
+
 export function isHostTool(tool: ToolName): boolean {
   return HOST_TOOLS.includes(tool)
 }
 
 export const AdminOnly = (detail: string) => new RepositoryError(detail, 403, 'ADMIN_ONLY')
+
+/** Deleting bots or documents and showing a bot's browser window are for workspace admins. */
+export function assertAdmin(viewer: Viewer, action: string): void {
+  if (viewer.role !== 'admin') throw AdminOnly(`Only workspace admins can ${action}.`)
+}
 
 /**
  * A member may keep or remove a bot's host-reaching tools but never add one:
@@ -79,6 +89,20 @@ export function assertToolChange(viewer: Viewer, before: readonly ToolName[], af
   const added = after.filter((tool) => isHostTool(tool) && !before.includes(tool))
   if (added.length > 0) {
     throw AdminOnly(`Only workspace admins can turn on ${added.join(', ')}.`)
+  }
+}
+
+/**
+ * The whole of a member's limits on creating (`before` null) or editing a bot:
+ * no new host-reaching tool, and no opening its browser as a window on the
+ * server's screen — that is the admin-only browser switch, and an edit must
+ * not be a way around it. Closing the window, like removing a tool, is fine.
+ */
+export function assertConfigChange(viewer: Viewer, before: AssistantConfig | null, after: AssistantConfig): void {
+  assertToolChange(viewer, before?.tools ?? [], after.tools)
+  if (viewer.role === 'admin') return
+  if (after.browser.headed && !(before?.browser.headed ?? DEFAULT_BROWSER.headed)) {
+    throw AdminOnly("Only workspace admins can show a bot's browser window.")
   }
 }
 

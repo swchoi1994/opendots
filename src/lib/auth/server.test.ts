@@ -31,3 +31,23 @@ test('Clerk mode with nobody signed in has no viewer, and requiring one is a 401
     return error instanceof Unauthenticated && error.status === 401 && error.code === 'UNAUTHENTICATED'
   })
 })
+
+test('the first personal sign-in claims the local bots; a team viewer never does, and nobody claims twice', async () => {
+  const { createMemoryRepository, memoryRepository } = await import('../repository/memory-store')
+  const localUrl = (await memoryRepository.listChannels())[0]!.channelUrl
+  const home = (userId: string) => createMemoryRepository({ workspaceId: userId, actor: { userId, name: userId } })
+
+  setAuthSourceForTests(async () => ({ userId: 'user_t', orgId: 'org_t', isOrgAdmin: true, claims: null }))
+  await getViewer(CLERK)
+  assert.ok(await memoryRepository.getChannel(localUrl), 'a team viewer leaves local data alone')
+
+  setAuthSourceForTests(async () => ({ userId: 'user_a', orgId: null, isOrgAdmin: false, claims: null }))
+  await getViewer(CLERK)
+  assert.equal(await memoryRepository.getChannel(localUrl), null)
+  assert.ok(await home('user_a').getChannel(localUrl), 'the local bots are now in their personal workspace')
+
+  setAuthSourceForTests(async () => ({ userId: 'user_b', orgId: null, isOrgAdmin: false, claims: null }))
+  await getViewer(CLERK)
+  assert.ok(await home('user_a').getChannel(localUrl), 'a second personal sign-in takes nothing')
+  assert.equal(await home('user_b').getChannel(localUrl), null)
+})

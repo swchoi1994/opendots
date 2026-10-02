@@ -214,6 +214,8 @@ export function createMemoryRepository(scope: Scope): ChatRepository {
   }
 
   return {
+    scope,
+
     async listChannels() {
       seedIfEmpty(store(), scope)
       const mine = [...store().channels.values()].filter((channel) => channel.workspaceId === scope.workspaceId)

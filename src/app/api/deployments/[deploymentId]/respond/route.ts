@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { buildRespondStream } from '@/lib/ai/respond-stream'
 import { cookieNameFor, verifySession } from '@/lib/deployment-session'
 import { getRepository } from '@/lib/repository'
+import { visitorScope } from '@/lib/repository/chat-repository'
 
 interface RouteContext {
   params: Promise<{ deploymentId: string }>
@@ -25,5 +26,5 @@ export async function POST(_request: Request, { params }: RouteContext) {
   // The channel comes from the deployment, never from the request. The trigger
   // marks the turn untrusted: anyone with the link and passcode can drive it,
   // so files, shell and skills are withheld for the run.
-  return buildRespondStream(deployment.channelUrl, 'deployment_visitor')
+  return buildRespondStream(deployment.channelUrl, 'deployment_visitor', visitorScope(deployment))
 }

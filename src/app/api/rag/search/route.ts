@@ -1,8 +1,15 @@
 import { NextResponse } from 'next/server'
+import type { ChatRepository } from '@/lib/repository/chat-repository'
 import { getAiConfig } from '@/lib/ai/config'
 import { RetrieverNotConfiguredError, getRetriever } from '@/lib/ai/rag/retriever'
+import { asViewer } from '@/lib/http/as-viewer'
 
+/** Searches the built-in corpus and the viewer's workspace documents. */
 export async function GET(request: Request) {
+  return asViewer(({ repo }) => search(request, repo))
+}
+
+async function search(request: Request, repo: ChatRepository): Promise<Response> {
   const query = new URL(request.url).searchParams.get('q')
 
   if (!query || query.trim().length === 0) {
@@ -18,7 +25,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const retriever = await getRetriever(config)
+    const retriever = await getRetriever(config, repo)
     const results = await retriever.retrieve(query.trim())
     return NextResponse.json({
       query: query.trim(),

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildHealth } from './health'
+import { buildBriefHealth, buildHealth } from './health'
 
 /**
  * No network: the model catalog is always injected so these tests never
@@ -33,4 +33,12 @@ test('buildHealth responds 503 and degraded when the store throws', async () => 
   assert.equal(body.status, 'degraded')
   assert.ok(body.store && typeof body.store === 'object')
   assert.equal((body.store as { error?: string }).error, 'PGlite data directory is locked by pid 123')
+})
+
+test('the signed-out health check says only whether the store answers', async () => {
+  assert.deepEqual(await buildBriefHealth(async () => []), { httpStatus: 200, body: { status: 'ok', service: 'opendots' } })
+  const down = await buildBriefHealth(async () => {
+    throw new Error('connection refused')
+  })
+  assert.deepEqual(down, { httpStatus: 503, body: { status: 'degraded', service: 'opendots' } }, 'and never why')
 })

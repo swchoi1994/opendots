@@ -1,4 +1,5 @@
 import { screenFrame } from '../domain/screen'
+import type { Scope } from '../repository/chat-repository'
 import { loadTurnContext, runBotTurn, TurnError, type TurnContext, type TurnTrigger } from './agents/run-bot-turn'
 
 /** One SSE frame: a complete JSON object on a `data:` line. */
@@ -14,11 +15,12 @@ function frame(event: string, payload: unknown): string {
  */
 export async function buildRespondStream(
   channelUrl: string,
-  trigger: TurnTrigger = 'user_message',
+  trigger: TurnTrigger,
+  scope: Scope,
 ): Promise<Response> {
   let ctx: TurnContext
   try {
-    ctx = await loadTurnContext(channelUrl, trigger)
+    ctx = await loadTurnContext(channelUrl, trigger, scope)
   } catch (cause) {
     if (cause instanceof TurnError) {
       return Response.json({ error: cause.message, code: cause.code }, { status: cause.status })

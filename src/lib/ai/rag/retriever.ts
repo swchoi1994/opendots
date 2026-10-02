@@ -213,11 +213,12 @@ interface CacheEntry {
 }
 
 /**
- * Keyed by repository instance (not a single global), so an injected fake
- * repository in a test never shares a cache entry with the real one — and in
- * production there is only ever one repository instance anyway.
+ * One entry per workspace: documents belong to a workspace, and routes build a
+ * repository instance per request, so keying by instance would rebuild the
+ * index on every turn. A document's id is unique and its content never
+ * changes, so the workspace plus its sorted ids fully determine the index.
  */
-const cache = new WeakMap<ChatRepository, CacheEntry>()
+const cache = new Map<string, CacheEntry>()
 
 /**
  * Knowledge Search draws on two sources: the built-in seed corpus and every
@@ -254,7 +255,8 @@ export async function getRetriever(
   const ids = await repo.listSkillIds()
   const idsKey = ids.slice().sort().join(',')
 
-  const entry = cache.get(repo)
+  const key = repo.scope.workspaceId
+  const entry = cache.get(key)
   if (entry && entry.ids === idsKey) return entry.retriever
 
   const skills = await repo.listSkills()
@@ -268,6 +270,6 @@ export async function getRetriever(
   }))
 
   const retriever = new InMemoryRetriever([...KNOWLEDGE_BASE, ...skillDocuments], config)
-  cache.set(repo, { ids: idsKey, retriever })
+  cache.set(key, { ids: idsKey, retriever })
   return retriever
 }

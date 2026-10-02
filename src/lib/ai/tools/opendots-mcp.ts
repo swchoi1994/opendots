@@ -1,5 +1,6 @@
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
+import type { ChatRepository } from '../../repository/chat-repository'
 import { getRetriever, type RetrievedChunk } from '../rag/retriever'
 import { browserTools, type BrowserToolsContext } from './browser-tools'
 import { OPENDOTS_SERVER_NAME } from './grants'
@@ -13,6 +14,8 @@ import { installSkill, searchSkills } from './skills-sh'
  * `mcp__opendots__<name>`; grants.ts is the only other place that spells them.
  */
 export interface OpenDotsServerContext {
+  /** The turn's workspace store: knowledge search sees only its documents. */
+  repo: ChatRepository
   /** Uploaded knowledge documents this bot may search. */
   skillIds: string[]
   workspaceDir: string
@@ -33,7 +36,7 @@ export function createOpenDotsServer(ctx: OpenDotsServerContext): McpSdkServerCo
     'Search this bot\'s uploaded knowledge documents and the built-in corpus. Use it before answering questions about policies, runbooks, or anything the operator may have uploaded.',
     { query: z.string().min(1).describe('What to look for, as a natural-language question') },
     async ({ query }) => {
-      const retriever = await getRetriever()
+      const retriever = await getRetriever(undefined, ctx.repo)
       const chunks = await retriever.retrieve(query, { skillIds: ctx.skillIds })
       ctx.onRetrieved?.(chunks)
       if (chunks.length === 0) return text('No passages matched. Answer from your own knowledge and say so.')

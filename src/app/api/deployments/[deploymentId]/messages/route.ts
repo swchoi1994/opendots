@@ -2,7 +2,7 @@ import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { checkInput } from '@/lib/ai/guardrails/policies'
 import { cookieNameFor, verifySession } from '@/lib/deployment-session'
-import { RepositoryError } from '@/lib/repository/chat-repository'
+import { RepositoryError, visitorScope } from '@/lib/repository/chat-repository'
 import { getRepository } from '@/lib/repository'
 
 interface RouteContext {
@@ -30,6 +30,9 @@ export async function POST(request: Request, { params }: RouteContext) {
     return NextResponse.json({ error: 'Locked', code: 'LOCKED' }, { status: 401 })
   }
 
+  // The channel's workspace, acting as this link's visitor: never the owner.
+  const repo = getRepository(visitorScope(deployment))
+
   if (!deployment.allowPosting) {
     return NextResponse.json(
       { error: 'This deployment is read-only', code: 'READ_ONLY' },
@@ -52,7 +55,7 @@ export async function POST(request: Request, { params }: RouteContext) {
     )
   }
 
-  const channel = await getRepository().getChannel(deployment.channelUrl)
+  const channel = await repo.getChannel(deployment.channelUrl)
   if (channel?.assistant) {
     const verdict = checkInput(text, channel.assistant.guardrails)
     if (verdict.action === 'block') {
@@ -64,7 +67,7 @@ export async function POST(request: Request, { params }: RouteContext) {
   }
 
   try {
-    const message = await getRepository().sendMessage(deployment.channelUrl, text)
+    const message = await repo.sendMessage(deployment.channelUrl, text)
     return NextResponse.json({ message, expectsReply: Boolean(channel?.assistant) }, { status: 201 })
   } catch (error) {
     if (error instanceof RepositoryError) {

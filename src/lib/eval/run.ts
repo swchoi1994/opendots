@@ -4,6 +4,10 @@ import { checkInput } from '../ai/guardrails/policies'
 import { GOLDEN_SET, assistantForCase, type GoldenCase } from './golden-set'
 import type { EvaluationInput } from './evaluators'
 import { getRepository } from '../repository'
+import { LOCAL_SCOPE } from '../repository/chat-repository'
+
+/** The eval is single-user and local whatever the auth mode: its documents live in `local`. */
+const repo = () => getRepository(LOCAL_SCOPE)
 
 export interface CaseResult {
   id: string
@@ -33,7 +37,7 @@ async function runCase(testCase: GoldenCase): Promise<CaseResult> {
 
   try {
     for (const skill of testCase.skills ?? []) {
-      const created = await getRepository().createSkill(skill)
+      const created = await repo().createSkill(skill)
       uploadedIds.push(created.id)
     }
 
@@ -59,6 +63,7 @@ async function runCase(testCase: GoldenCase): Promise<CaseResult> {
         memory: testCase.memory ?? [],
         bot: assistant,
         skillIds: assistant.skillIds,
+        repo: repo(),
         hasSession: testCase.hasSession ?? false,
       })
       input = {
@@ -91,7 +96,7 @@ async function runCase(testCase: GoldenCase): Promise<CaseResult> {
   } finally {
     // Tear down uploaded skills so cases cannot contaminate each other's index.
     for (const id of uploadedIds) {
-      await getRepository().deleteSkill(id).catch(() => undefined)
+      await repo().deleteSkill(id).catch(() => undefined)
     }
   }
 }

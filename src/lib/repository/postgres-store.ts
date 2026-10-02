@@ -227,7 +227,7 @@ export class PostgresChatRepository implements ChatRepository {
   /** Tests inject an in-memory PGlite; the app uses the process-wide database (PGlite or a server). */
   constructor(
     private readonly injected?: Db,
-    private readonly scope: Scope = LOCAL_SCOPE,
+    readonly scope: Scope = LOCAL_SCOPE,
   ) {
     this.me = actorUser(scope)
   }

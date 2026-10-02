@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { DEFAULT_ASSISTANT } from '../domain/assistant'
 import {
   LOCAL_VIEWER,
+  assertAdmin,
+  assertConfigChange,
   assertToolChange,
   authMode,
   canToggleTool,
   isHostTool,
+  scopeFor,
   viewerFromAuth,
   type Viewer,
 } from './viewer'
@@ -75,4 +79,27 @@ test('the UI lets a member switch a host-reaching tool off, but never on', () =>
   assert.equal(canToggleTool('member', 'rag_search', false), true)
   assert.equal(canToggleTool('member', 'shell', false), false)
   assert.equal(canToggleTool('member', 'shell', true), true)
+})
+
+test("a member's bot edit cannot open the browser window either; an admin's can", () => {
+  const bot = { ...DEFAULT_ASSISTANT, tools: ['rag_search' as const] }
+  const headed = { ...bot, browser: { headed: true } }
+  assert.throws(() => assertConfigChange(member, bot, headed), /browser window/)
+  assert.throws(() => assertConfigChange(member, null, headed), /browser window/, 'nor can a new bot start with one')
+  assert.doesNotThrow(() => assertConfigChange(member, headed, headed), 'keeping it as it is is fine')
+  assert.doesNotThrow(() => assertConfigChange(member, headed, bot), 'and so is closing it')
+  assert.doesNotThrow(() => assertConfigChange(LOCAL_VIEWER, bot, headed))
+  assert.throws(() => assertConfigChange(member, bot, { ...bot, tools: ['shell'] }), /admins/, 'the tool rule still applies')
+})
+
+test('admin-only actions refuse members with 403 ADMIN_ONLY', () => {
+  assert.doesNotThrow(() => assertAdmin(LOCAL_VIEWER, 'delete a bot'))
+  assert.throws(() => assertAdmin(member, 'delete a bot'), (error: unknown) => {
+    const e = error as { status?: number; code?: string; message?: string }
+    return e.status === 403 && e.code === 'ADMIN_ONLY' && e.message === 'Only workspace admins can delete a bot.'
+  })
+})
+
+test('a viewer acts in their own workspace, as themselves', () => {
+  assert.deepEqual(scopeFor(member), { workspaceId: 'org_t', actor: { userId: 'user_b', name: 'You' } })
 })

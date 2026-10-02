@@ -1,3 +1,4 @@
+import { getRepository } from '../repository'
 import { LOCAL_VIEWER, authMode, viewerFromAuth, type AuthFacts, type Viewer } from './viewer'
 
 /**
@@ -39,9 +40,34 @@ export function setAuthSourceForTests(source: AuthSource | null): void {
   authSource = source ?? clerkAuth
 }
 
+/**
+ * The first personal sign-in takes over what was made before sign-in was
+ * turned on (spec §9). The store makes it happen once for the whole instance;
+ * this promise only saves every later request from asking again. Concurrent
+ * first requests share it, and a failed attempt is forgotten so the next
+ * request retries.
+ */
+let claimed: Promise<void> | null = null
+
+function claimLocalDataOnce(userId: string): Promise<void> {
+  claimed ??= getRepository()
+    .claimLocalData(userId)
+    .then(
+      () => undefined,
+      (error: unknown) => {
+        claimed = null
+        throw error
+      },
+    )
+  return claimed
+}
+
 export async function getViewer(env: Partial<NodeJS.ProcessEnv> = process.env): Promise<Viewer | null> {
   if (authMode(env) === 'local') return LOCAL_VIEWER
-  return viewerFromAuth(await authSource())
+  const viewer = viewerFromAuth(await authSource())
+  // Only a personal workspace claims: data made alone shouldn't land in a team.
+  if (viewer && viewer.workspaceId === viewer.userId) await claimLocalDataOnce(viewer.userId)
+  return viewer
 }
 
 export async function requireViewer(env: Partial<NodeJS.ProcessEnv> = process.env): Promise<Viewer> {
