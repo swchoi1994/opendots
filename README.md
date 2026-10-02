@@ -6,7 +6,9 @@ OpenDots is inspired by xAI's Grok Bot and OpenAI's Dots, and it is open source 
 
 > **Early project.** Image and file attachments, bots that work with each other, graph memory and workflow graphs are being built. See the [roadmap](#roadmap).
 
-## What bots can do today
+## Features
+
+**Bots**
 
 - **Hold a role.** Nine starter bots (Chief of Staff, EA, Inbox Manager, Sales Outbound, Talent Scout, Growth Marketer, Customer Support, Expense Manager, Invoice Collector), each with a short role prompt you can rewrite. Make your own with **+**.
 - **Keep context.** Every bot keeps its own agent session, which survives a restart.
@@ -16,9 +18,26 @@ OpenDots is inspired by xAI's Grok Bot and OpenAI's Dots, and it is open source 
 - **Search your documents.** Upload Markdown documents for a bot to search before it answers.
 - **Be shared.** Share one conversation behind a link and a passcode.
 
-## Quick start
+**Models**
+
+- **Claude or local, per bot.** Each bot picks its own model: Claude Sonnet, Opus or Haiku through an Anthropic API key, or any tool-capable model Ollama serves on your machine. A **Default** setting follows whatever the server has available.
+
+**People and teams (optional)**
+
+- **Sign in with Google, Microsoft or email** through [Clerk](https://clerk.com). Without it, OpenDots is single-user and stays on `127.0.0.1`.
+- **Personal and team workspaces.** Everyone in a team sees the same bots, chats and documents, and each message shows who sent it.
+- **Host access stays with the people who run the server.** Only the operators you list can give a bot Files, Terminal, Skills or Browser.
+
+**Running it**
+
+- **Nothing to set up.** Data lives in an embedded Postgres ([PGlite](https://pglite.dev)) under `./.opendots`; `docker compose up` runs it with Postgres and pgvector instead.
+- **Careful by default.** It listens only on `127.0.0.1`, refuses changes requested by other websites, keeps each bot's file tools inside its own workspace, and gives a bot only the credentials for its own model. See the [safety model](#safety-model).
+
+## Get started
 
 You need Node.js 22 or newer, pnpm (`corepack enable pnpm`), and either Ollama or an Anthropic API key.
+
+**1. Install and run.**
 
 ```bash
 git clone https://github.com/swchoi1994/opendots.git
@@ -28,6 +47,12 @@ pnpm dev            # http://127.0.0.1:3000
 ```
 
 There is no database to set up. OpenDots keeps its data in an embedded Postgres ([PGlite](https://pglite.dev)) under `./.opendots`.
+
+**2. Give it a model** (below): Ollama on your machine, a Claude API key, or both.
+
+**3. Talk to a bot.** Open http://127.0.0.1:3000, pick one of the nine starter bots, and send it a message. Use **+** to make your own: name it, write its role, choose its model and tools.
+
+**4. Optional:** install `agent-browser` (`npm i -g agent-browser`) so bots can use the Browser tool, turn on [sign-in and team workspaces](#sign-in-and-workspaces), or [run it with Docker](#run-with-docker).
 
 ### Choose a model
 
