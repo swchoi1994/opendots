@@ -76,16 +76,28 @@ function realpathNearest(path: string, hops = 0): string {
  * case-insensitive by default. Elsewhere names compare exactly.
  */
 function sameNameAs(platform: NodeJS.Platform): (segment: string) => string {
-  if (platform === 'win32') return (segment) => segment.replace(/:.*$/, '').replace(/[. ]+$/, '').toLowerCase()
-  if (platform === 'darwin') return (segment) => segment.toLowerCase()
+  if (platform === 'win32') return (segment) => fold(segment.replace(/:.*$/, '').replace(/[. ]+$/, ''))
+  if (platform === 'darwin') return fold
   return (segment) => segment
+}
+
+/**
+ * Folds a name the way a case- and normalization-insensitive file system can:
+ * compatibility-decompose, drop combining marks, then upper- and lower-case,
+ * which maps lookalikes such as U+017F (long s) to "s" and U+212A (Kelvin) to
+ * "k". APFS writes `.mcp.jſon` as `.mcp.json`, so plain toLowerCase() is not
+ * enough. Over-folding can only deny more names, never fewer.
+ */
+function fold(segment: string): string {
+  return segment.normalize('NFKD').replace(/\p{M}/gu, '').toUpperCase().toLowerCase()
 }
 
 /**
  * True for what the CLI loads as configuration or instructions: anything under
  * a `.claude` directory (settings, skills, agents, commands, hooks), the
- * project's `.mcp.json`, and CLAUDE.md or CLAUDE.local.md. The CLI also picks
- * up CLAUDE.md files and `.claude` directories below its working directory, so
+ * project's `.mcp.json`, and CLAUDE.md or CLAUDE.local.md — plus any `.git`
+ * directory, whose config can make git run commands. The CLI also picks up
+ * CLAUDE.md files and `.claude` directories below its working directory, so
  * those match at any depth; `.mcp.json` is only read at the project root.
  */
 export function isConfigPath(root: string, realPath: string, platform: NodeJS.Platform = process.platform): boolean {
@@ -93,6 +105,9 @@ export function isConfigPath(root: string, realPath: string, platform: NodeJS.Pl
   const segments = relative(root, realPath).split(sep).filter(Boolean).map(normal)
   if (segments.length === 0) return false
   if (segments.includes(normal('.claude'))) return true
+  // A `.git` directory makes the folder a repository, and its config can name
+  // commands git runs on its own (core.fsmonitor on `git status`).
+  if (segments.includes(normal('.git'))) return true
   const name = segments[segments.length - 1]
   if (name === normal('CLAUDE.md') || name === normal('CLAUDE.local.md')) return true
   return segments.length === 1 && name === normal('.mcp.json')

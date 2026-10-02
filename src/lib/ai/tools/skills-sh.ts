@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
-import { existsSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join } from 'node:path'
 import { baseEnv } from '../brain-env'
 
 /**
@@ -149,17 +150,6 @@ export async function searchSkills(
   return parseSkillsFindOutput(stdout).slice(0, limit)
 }
 
-/** Every `<dir>/SKILL.md` under `skillsDir` right now, with its mtime. */
-function snapshotSkills(skillsDir: string): Map<string, number> {
-  const snapshot = new Map<string, number>()
-  if (!existsSync(skillsDir)) return snapshot
-  for (const name of readdirSync(skillsDir)) {
-    const md = join(skillsDir, name, 'SKILL.md')
-    if (existsSync(md)) snapshot.set(name, statSync(md).mtimeMs)
-  }
-  return snapshot
-}
-
 /**
  * The SKILL.md this run actually produced.
  *
@@ -192,23 +182,37 @@ export async function installSkill(
   const valid = validateSkillRef(ref)
   const skill = valid.slice(valid.indexOf('@') + 1)
   const runner = opts.runner ?? defaultRunner
-  const skillsDir = join(workspaceDir, '.claude', 'skills')
-  const before = snapshotSkills(skillsDir)
 
-  const { code, stderr, stdout } = await runner(
-    'npx',
-    ['-y', 'skills@latest', 'add', valid, '-y', '-a', 'claude-code', '--copy'],
-    { cwd: workspaceDir, timeoutMs: INSTALL_TIMEOUT_MS },
-  )
-  if (code !== 0) {
-    throw new Error(`skills add failed (${code}): ${(stderr || stdout).trim().slice(-800)}`)
-  }
-
-  const path = findInstalledSkillMd(skillsDir, skill, before)
-  if (!path) {
-    throw new Error(
-      `skills add exited 0 but wrote no new skill under .claude/skills — is "${valid}" already installed?`,
+  // npx runs in a staging directory OpenDots creates, never in the workspace:
+  // npm reads a project .npmrc by walking up from its cwd, so a bot that wrote
+  // <workspace>/.npmrc (registry=…) could otherwise choose the code npx runs.
+  const staging = mkdtempSync(join(tmpdir(), 'opendots-skill-'))
+  try {
+    const stagedSkills = join(staging, '.claude', 'skills')
+    const { code, stderr, stdout } = await runner(
+      'npx',
+      ['-y', 'skills@latest', 'add', valid, '-y', '-a', 'claude-code', '--copy'],
+      { cwd: staging, timeoutMs: INSTALL_TIMEOUT_MS },
     )
+    if (code !== 0) {
+      throw new Error(`skills add failed (${code}): ${(stderr || stdout).trim().slice(-800)}`)
+    }
+
+    const staged = findInstalledSkillMd(stagedSkills, skill, new Map())
+    if (!staged) {
+      throw new Error(
+        `skills add exited 0 but wrote no new skill under .claude/skills — is "${valid}" already installed?`,
+      )
+    }
+
+    // Copy (not rename): the temp dir and the workspace can be on different volumes.
+    const folder = basename(dirname(staged))
+    const target = join(workspaceDir, '.claude', 'skills', folder)
+    mkdirSync(dirname(target), { recursive: true })
+    rmSync(target, { recursive: true, force: true })
+    cpSync(dirname(staged), target, { recursive: true })
+    return { skill, path: join(target, 'SKILL.md') }
+  } finally {
+    rmSync(staging, { recursive: true, force: true })
   }
-  return { skill, path }
 }

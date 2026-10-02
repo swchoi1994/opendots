@@ -162,3 +162,26 @@ test('the hook names the configuration rule when it denies', async (t) => {
   )
   assert.equal(CONFIG_FILE, "Bots can't change their own configuration files.")
 })
+
+test('on darwin and win32 Unicode lookalikes of a configuration path are the same path', (t) => {
+  const ws = workspace(t)
+  // APFS folds U+017F (long s) to "s", so `.mcp.jſon` is written as `.mcp.json`.
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: '.mcp.jſon' }, ws, 'darwin'), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: '.mcp.jſon' }, ws, 'win32'), configDenied)
+  // U+212A (Kelvin sign) folds to "k"; a combining mark rides on a plain letter.
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'CLAUDE.md'.replace('A', 'Á') }, ws, 'darwin'), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: '.claude/sKills/x/SKILL.md' }, ws, 'darwin'), configDenied)
+  // A case-sensitive file system keeps them distinct, so nothing extra is denied there.
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: '.mcp.jſon' }, ws, 'linux'), allowed)
+})
+
+test('a bot cannot turn its workspace into a git repository', (t) => {
+  const ws = workspace(t)
+  // A bot-written .git/config can set core.fsmonitor, a command git runs on `git status`.
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: '.git/config' }, ws), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: '.git/HEAD' }, ws), configDenied)
+  assert.deepEqual(checkWorkspacePath('Edit', { file_path: 'notes/.git/config' }, ws), configDenied)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: '.GIT/config' }, ws, 'darwin'), configDenied)
+  assert.deepEqual(checkWorkspacePath('Read', { file_path: '.git/config' }, ws), allowed)
+  assert.deepEqual(checkWorkspacePath('Write', { file_path: 'notes/.gitignore' }, ws), allowed)
+})

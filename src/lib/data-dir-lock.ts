@@ -53,11 +53,38 @@ function releaseAll(): void {
 let exitHookInstalled = false
 
 /**
+ * Takes the lock file, or returns false when it already exists. A hard link is
+ * preferred (the file appears atomically with its content). File systems
+ * without hard links (exFAT, some SMB shares) fail link() with something other
+ * than EEXIST; there an exclusive create stands in. It has one gap the link
+ * does not: between create and write the file is empty, and a starter racing
+ * in that instant reads it as stale. Accepted for this fallback only, since
+ * two OpenDots processes starting within the same millisecond on such a file
+ * system is far rarer than the plain second-process case the lock exists for.
+ */
+function claim(link: typeof linkSync, draft: string, path: string): boolean {
+  try {
+    link(draft, path)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false
+  }
+  try {
+    writeFileSync(path, `${process.pid}\n`, { flag: 'wx' })
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false
+    throw error
+  }
+}
+
+/**
  * Claims `dir` for this process, or throws naming the directory, the pid that
  * holds it, and what to do. Returns the release function (idempotent; it never
  * removes a lock another process has since taken).
  */
-export function lockDataDir(dir: string): () => void {
+export function lockDataDir(dir: string, deps: { link?: typeof linkSync } = {}): () => void {
+  const link = deps.link ?? linkSync
   const path = lockPathFor(dir)
   if (held.has(path)) {
     throw new Error(`The embedded database at ${dir} is already open in this process; open it once and share the handle.`)
@@ -70,12 +97,8 @@ export function lockDataDir(dir: string): () => void {
   writeFileSync(draft, `${process.pid}\n`)
   try {
     for (let attempt = 0; ; attempt++) {
-      try {
-        linkSync(draft, path)
-        break
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 3) throw error
-      }
+      if (claim(link, draft, path)) break
+      if (attempt >= 3) throw new Error(`Could not take the lock ${path} after several attempts; another OpenDots process may be starting.`)
       const holder = readHolder(path)
       // Our own pid without our own claim is a pid reused after a restart (a
       // container's pid 1, say): as stale as a dead one.

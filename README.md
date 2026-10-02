@@ -59,7 +59,7 @@ OpenDots runs agents that act on your computer. These are the boundaries:
 - **Local only.** `pnpm dev` and `pnpm start` listen on `127.0.0.1`. There is no sign-in yet, so anyone who can reach the port controls every bot. Don't expose an instance to a network until sign-in ships.
 - **Web pages can't drive your bots.** OpenDots answers only requests addressed to `127.0.0.1`, `localhost` or `[::1]` (or a name you list in `OPENDOTS_ALLOWED_HOSTS`), which stops DNS-rebinding tricks. API calls that change something are refused when they come from another site, so a page you visit can't post a message to a bot and make it act.
 - **Files stay in the workspace.** Every call to Read, Write, Edit, NotebookEdit, Glob and Grep is checked, and a path outside the bot's workspace folder is refused, including one that leaves through a symlink or `~`.
-- **Bots can't change their own configuration.** Write, Edit and NotebookEdit are refused for the workspace's `.claude/` folder (settings, skills, agents, commands, hooks), `.mcp.json`, `CLAUDE.md` and `CLAUDE.local.md`, including through a symlink or, on macOS and Windows, a different letter case. Those files decide what a bot's process runs, so a bot that could write them could give itself a shell. Bots can still read them, and skills still install through the Find and install skills tool.
+- **Bots can't change their own configuration.** Write, Edit and NotebookEdit are refused for the workspace's `.claude/` folder (settings, skills, agents, commands, hooks), `.mcp.json`, `CLAUDE.md`, `CLAUDE.local.md` and any `.git/` folder, including through a symlink or, on macOS and Windows, a different letter case or a Unicode lookalike. Those files decide what a bot's process runs, so a bot that could write them could give itself a shell. Bots can still read them, and skills still install through the Find and install skills tool, which runs the installer outside the workspace so nothing a bot writes there (a `.npmrc`, say) can change what it downloads.
 - **Terminal means host access.** Shell commands run as your user and aren't confined. The Terminal tool is off by default, and the app warns when a bot has both Terminal and Browser.
 - **Web pages are untrusted input.** Text a bot reads on a page can carry instructions. Keep a browsing bot's other tools to a minimum.
 - **Secrets stay with the server.** A bot's process gets basic variables (`PATH`, `HOME`) and the credentials for its own model, nothing else. Database URLs and the share-link secret are withheld.
@@ -118,7 +118,7 @@ pnpm eval        # golden set, always in dry-run
 pnpm db:init     # apply migrations now (the app also does this on first use)
 ```
 
-Only one process at a time can open the embedded database. Stop the app before you run `pnpm db:init` against it, and don't run `pnpm dev` and `pnpm start` side by side on the same data directory: the second process stops with a message naming the one that holds it.
+Only one process at a time can open the embedded database. Stop the app before you run `pnpm db:init` against it, and don't run `pnpm dev` and `pnpm start` side by side on the same data directory. `pnpm db:init` refuses to run while the app holds the database, and a second server keeps running but answers every request that needs the database (including `/api/health`, which reports 503) with a message naming the process that holds it.
 
 ## Architecture
 
